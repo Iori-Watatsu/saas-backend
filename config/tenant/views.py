@@ -4,6 +4,6 @@ from .models import Tenant
 from .serializers import TenantSerializer
 
 # Create your views here.
-class TenantAPIView(generics.ListCreateAPIView):
+class TenantCreateAPIView(generics.ListCreateAPIView):
     queryset = Tenant.objects.all()
     serializer_class = TenantSerializer
