@@ -20,5 +20,5 @@ from tenant import views
 
 urlpatterns = [
     path('admin/', admin.site.urls),
-    path('api/tenants', views.TenantCreatetAPIView.as_view(), name='tenant-list-create'),
+    path('api/tenant', views.TenantCreateAPIView.as_view(), name='tenant-list-create'),
 ]
