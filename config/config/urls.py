@@ -17,11 +17,11 @@ Including another URLconf
 from django.contrib import admin
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
-from tenant.views import TenantCreateAPIView
+from tenant.views import TenantView
 
 # Configure app api root view and urls
 router = DefaultRouter()
-router.register(r'tenent', TenantCreateAPIView)
+router.register(r'tenent', TenantView, basename='tenant')
 
 urlpatterns = [
     path('admin/', admin.site.urls),
