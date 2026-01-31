@@ -1,12 +1,12 @@
-from django.shortcuts import render
 from rest_framework import generics
 from rest_framework.permissions import AllowAny
 from .models import Tenant
 from .serializers import TenantSerializer
 
+
 # Create your views here.
 class TenantCreateAPIView(generics.ListCreateAPIView):
-    queryset = Tenant.objects.all()
+    queryset = Tenant.objects.select_related.all()
     serializer_class = TenantSerializer
     permission_classes = [AllowAny]
 
@@ -17,3 +17,4 @@ class TenantCreateAPIView(generics.ListCreateAPIView):
         if name_filter is not None:
             queryset = queryset.filter(name__icontains=name_filter)
         return queryset
+
