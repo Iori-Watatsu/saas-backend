@@ -6,7 +6,7 @@ from .serializers import TenantSerializer
 
 # Create your views here.
 class TenantCreateAPIView(generics.ListCreateAPIView):
-    queryset = Tenant.objects.select_related.all()
+    queryset = Tenant.objects.select_related()
     serializer_class = TenantSerializer
     permission_classes = [AllowAny]
 
