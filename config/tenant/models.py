@@ -3,6 +3,7 @@ from uuid import uuid4
 
 # Create your models here.
 class Tenant(models.Model):
+    objects = None
     # Use Universally Unique Identifiers for individual tenant's global uniqueness, ehanced security and data merging without id collisions.
     id = models.UUIDField(default=uuid4, unique=True, primary_key=True, editable=False)
     company_name = models.CharField(max_length=100)
@@ -28,5 +29,3 @@ class Tenant(models.Model):
 
     def __str__(self):
         return self.subdomain
-
-objects = Tenant
