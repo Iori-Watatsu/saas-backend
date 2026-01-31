@@ -15,10 +15,15 @@ Including another URLconf
     2. Add a URL to urlpatterns:  path('blog/', include('blog.urls'))
 """
 from django.contrib import admin
-from django.urls import path
-from tenant import views
+from django.urls import path, include
+from rest_framework.routers import DefaultRouter
+from tenant.views import TenantCreateAPIView
+
+# Configure app api root view and urls
+router = DefaultRouter()
+router.register(r'tenent', TenantCreateAPIView)
 
 urlpatterns = [
     path('admin/', admin.site.urls),
-    path('api/tenant', views.TenantCreateAPIView.as_view(), name='tenant-list-create'),
+    path('api/', include(router.urls)),
 ]
