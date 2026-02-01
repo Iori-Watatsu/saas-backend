@@ -1,13 +1,15 @@
 from rest_framework import viewsets
+from rest_framework.authentication import TokenAuthentication
 from rest_framework.permissions import IsAuthenticatedOrReadOnly
 from .models import Tenant
 from .serializers import TenantSerializer
 
 # Create your views here.
 class TenantView(viewsets.ModelViewSet):
+    permission_classes = [IsAuthenticatedOrReadOnly]
+    authentication_classes = [TokenAuthentication]
     queryset = Tenant.objects.select_related()
     serializer_class = TenantSerializer
-    permission_classes = [IsAuthenticatedOrReadOnly]
 
     # Custom query filter
     def get_queryset(self):
