@@ -1,5 +1,5 @@
 from rest_framework import viewsets
-from rest_framework.permissions import AllowAny
+from rest_framework.permissions import IsAuthenticatedOrReadOnly
 from .models import Tenant
 from .serializers import TenantSerializer
 
@@ -7,7 +7,7 @@ from .serializers import TenantSerializer
 class TenantView(viewsets.ModelViewSet):
     queryset = Tenant.objects.select_related()
     serializer_class = TenantSerializer
-    permission_classes = [AllowAny]
+    permission_classes = [IsAuthenticatedOrReadOnly]
 
     # Custom query filter
     def get_queryset(self):
