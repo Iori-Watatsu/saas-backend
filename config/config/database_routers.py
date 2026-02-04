@@ -1,0 +1,64 @@
+from django.conf import settings
+from django_tenants.utils import get_tenant_model, get_public_schema_name
+
+class HybridTenantRouter:
+    # Database router for hybrid multi-tenant databases based on tenant type
+    @staticmethod
+    def _get_tenant(self):
+        # Obtain current tenant
+        from django.utils.deprecation import MiddlewareMixin
+
+        request = getattr(settings, 'CURRENT_REQUEST', None)
+        if request and hasattr(request, 'tenant'):
+            request.tenant
+
+        from django_tenants.utils import get_tenant
+        return get_tenant()
+
+    def db_for_read(self, model, **hints):
+        return self._route_tenant_db(model, **hints)
+
+    def db_for_write(self, model, **hints):
+        return self._route_tenant_db(model, **hints)
+
+    def _route_tenant_db(self, model, **hints):
+        # Route model to appropriate database
+        tenant = self._get_tenant()
+
+        # Default schema for shared apps(public)
+        if model._meta.app_label in settings.SHARED_APPS:
+            return 'default'
+
+        # No tenant uses public schema
+        if not tenant:
+            return 'default'
+
+        # Individual databases for Premium tenants
+        if tenant.tenant_type == 'premium':
+            return f"tenant_{tenant.subdomain}"
+
+        # Standard tenants use default database schema
+        return 'default'
+
+    # Control database migrations
+    def allow_migrate(self, db, app_label, model_name=None, **hints):
+        # Default for shared apps
+        if app_label in settings.SHARED_APPS:
+            return db == 'default'
+
+        # Default for both standard & premium tenants
+        if app_label in settings.TENANT_APPS:
+            if db.startwith('tenant_'):
+                return True # For premium clients databses
+
+            elif db == 'default':
+                return True
+
+        return False
+
+    def allow_relation(self, obj1, obj2, **hints):
+        # Get database for each object, allow relation within same database
+        db1 = self._route_tenant_db(obj1.__class__)
+        db2 = self._route_tenant_db(obj2.__class__)
+
+        return db1 == db2
