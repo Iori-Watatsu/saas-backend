@@ -10,18 +10,18 @@ class HybridTenantRouter:
 
         request = getattr(settings, 'CURRENT_REQUEST', None)
         if request and hasattr(request, 'tenant'):
-            request.tenant
+            return request.tenant
 
         from django_tenants.utils import get_tenant
         return get_tenant()
 
-    def db_for_read(self, model, **hints):
-        return self._route_tenant_db(model, **hints)
+    def db_for_read(self, model):
+        return self._route_tenant_db(model)
 
-    def db_for_write(self, model, **hints):
-        return self._route_tenant_db(model, **hints)
+    def db_for_write(self, model):
+        return self._route_tenant_db(model)
 
-    def _route_tenant_db(self, model, **hints):
+    def _route_tenant_db(self, model):
         # Route model to appropriate database
         tenant = self._get_tenant()
 
@@ -41,7 +41,7 @@ class HybridTenantRouter:
         return 'default'
 
     # Control database migrations
-    def allow_migrate(self, db, app_label, model_name=None, **hints):
+    def allow_migrate(self, db, app_label, model_name=None):
         # Default for shared apps
         if app_label in settings.SHARED_APPS:
             return db == 'default'
@@ -56,7 +56,7 @@ class HybridTenantRouter:
 
         return False
 
-    def allow_relation(self, obj1, obj2, **hints):
+    def allow_relation(self, obj1, obj2):
         # Get database for each object, allow relation within same database
         db1 = self._route_tenant_db(obj1.__class__)
         db2 = self._route_tenant_db(obj2.__class__)
