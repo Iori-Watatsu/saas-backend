@@ -12,6 +12,8 @@ https://docs.djangoproject.com/en/6.0/ref/settings/
 
 from pathlib import Path
 
+from examples.tenant_tutorial.tenant_tutorial.settings import TENANT_MODEL
+
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -72,6 +74,8 @@ TEMPLATES = [
 
 WSGI_APPLICATION = 'config.wsgi.application'
 
+# Register apps for django-tenants
+TENANT_MODEL = "tenant.Tenant"
 
 # Database
 # https://docs.djangoproject.com/en/6.0/ref/settings/#databases
