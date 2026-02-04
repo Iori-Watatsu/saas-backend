@@ -11,8 +11,7 @@ https://docs.djangoproject.com/en/6.0/ref/settings/
 """
 
 from pathlib import Path
-
-from examples.tenant_tutorial.tenant_tutorial.settings import TENANT_MODEL
+from examples.tenant_tutorial.tenant_tutorial.settings import TENANT_MODEL, SHARED_APPS
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -31,7 +30,6 @@ ALLOWED_HOSTS = []
 
 
 # Application definition
-
 INSTALLED_APPS = [
     'django_tenants',
     'django.contrib.admin',
@@ -43,6 +41,44 @@ INSTALLED_APPS = [
     'tenant',
     'rest_framework',
 ]
+
+# Tenant settings
+TENANT_MODEL = 'tenant.Tenant'
+TENANT_DOMAIN_MODEL = 'tenant.Domain'
+
+# Shared apps and Tenant apps
+SHARED_APPS = [
+    'django_tenants',
+    'tenant'
+
+    # Shared core apps
+    'django.contrib.admin',
+    'django.contrib.auth',
+    'django.contrib.contenttypes',
+    'django.contrib.sessions',
+    'django.contrib.messages',
+    'django.contrib.staticfiles',
+
+    # Shared third-party apps
+    'rest_framework',
+    'django_filters'
+]
+
+TENANT_APPS = [
+    # Apps that should have separate tables per tenant
+    'django.contrib.contenttypes',  # For permissions
+    'django.contrib.auth',  # Per-tenant users
+
+    # Your tenant-specific apps (Below examples for future ref)
+    'accounts',  # Example: user accounts per tenant
+    'business',  # Example: business data per tenant
+    # ... other apps that should have separate data per tenant
+]
+
+# Database router
+DATABASE_ROUTERS = (
+    'django_tenants.routers.TenantSyncRouter',
+)
 
 MIDDLEWARE = [
     'django_tenants.middleware.main.TenantMainMiddleware',
@@ -73,9 +109,6 @@ TEMPLATES = [
 ]
 
 WSGI_APPLICATION = 'config.wsgi.application'
-
-# Register apps for django-tenants
-TENANT_MODEL = "tenant.Tenant"
 
 # Database
 # https://docs.djangoproject.com/en/6.0/ref/settings/#databases
