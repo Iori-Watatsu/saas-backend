@@ -31,23 +31,6 @@ ALLOWED_HOSTS = []
 
 
 # Application definition
-INSTALLED_APPS = [
-    'django_tenants',
-    'django_filters',
-    'django.contrib.admin',
-    'django.contrib.auth',
-    'django.contrib.contenttypes',
-    'django.contrib.sessions',
-    'django.contrib.messages',
-    'django.contrib.staticfiles',
-    'tenant',
-    'rest_framework',
-]
-
-# Tenant settings
-TENANT_MODEL = 'tenant.Tenant'
-TENANT_DOMAIN_MODEL = 'tenant.Domain'
-
 # Shared apps and Tenant apps
 SHARED_APPS = [
     # Shared core apps
@@ -58,12 +41,11 @@ SHARED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
-
-    # Shared third-party apps
-    'rest_framework',
     'django_filters',
-
-    # Shared apps
+    'rest_framework',
+    'rest_framework.authtoken',
+    'corsheaders',
+    'drf_yasg',
     'tenant',
 ]
 
@@ -73,16 +55,14 @@ TENANT_APPS = [
     'django.contrib.contenttypes',  # For permissions
     'django.contrib.auth',  # Per-tenant users
 
-    # Your tenant-specific apps (Below examples for future ref)
-    #'accounts',  # Example: user accounts per tenant
-    #'business',  # Example: business data per tenant
-    # ... other apps that should have separate data per tenant
+    # Tenant-specific apps
+    'users',
+    'projects',
+    'tasks',
 ]
 
 # Rebuild INSTALLED_APPS
-INSTALLED_APPS = list(SHARED_APPS) + [
-    app for app in TENANT_APPS if app not in SHARED_APPS
-]
+INSTALLED_APPS = list(SHARED_APPS)
 
 MIDDLEWARE = [
     'django_tenants.middleware.main.TenantMainMiddleware',
@@ -117,23 +97,33 @@ WSGI_APPLICATION = 'config.wsgi.application'
 # Database
 # https://docs.djangoproject.com/en/6.0/ref/settings/#databases
 
-DATABASES = {
-    "default": {
-        "ENGINE": "django_tenants.postgresql_backend",  # ✅ THIS IS CRITICAL
-        "NAME": os.environ.get("POSTGRES_DB", "postgres"),
-        "USER": os.environ.get("POSTGRES_USER", "postgres"),
-        "PASSWORD": os.environ.get("POSTGRES_PASSWORD", "postgres"),
-        "HOST": os.environ.get("POSTGRES_HOST", "localhost"),
-        "PORT": os.environ.get("POSTGRES_PORT", "5432"),
-        "ATOMIC_REQUESTS": True,
+# Dynamic database config
+def get_databases():
+    databases = {
+        'default': {
+            'ENGINE': 'django_tenants.postgresql_backend',
+            'NAME': os.environ.get('DB_NAME', 'saas_platform'),
+            'USER': os.environ.get('DN_USER', 'postgres'),
+            'PASSWORD': os.environ.get('DB_PASSWORD', ''),
+            'HOST': os.environ.get('DB_HOST', 'localhost'),
+            'PORT': os.environ.get('DB_PORT', '5432'),
+            'CONN_MAX_AGE': 600,
+        }
     }
-}
+    # Add tenant databases from environment or load dynamically
+    # & will be added at runtime when tenants are created
+    return databases
 
+DATABASES = get_databases()
 
 # Database router
-DATABASE_ROUTERS = (
-    'django_tenants.routers.TenantSyncRouter',
-)
+DATABASE_ROUTERS = [
+    'config.database_routers.HybridTenantRouter',
+]
+
+# Tenant settings
+TENANT_MODEL = 'tenant.Tenant'
+TENANT_DOMAIN_MODEL = 'tenant.Domain'
 
 
 # Password validation
