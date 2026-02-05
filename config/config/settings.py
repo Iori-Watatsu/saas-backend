@@ -55,9 +55,9 @@ TENANT_APPS = [
     'django.contrib.auth',  # Per-tenant users
 
     # Tenant-specific apps
-    'users',
-    'projects',
-    'tasks',
+    #'users',
+    #'projects',
+    #'tasks',
 ]
 
 # Rebuild INSTALLED_APPS
