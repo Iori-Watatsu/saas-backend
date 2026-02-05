@@ -103,12 +103,13 @@ def get_databases():
     databases = {
         'default': {
             'ENGINE': 'django_tenants.postgresql_backend',
-            'NAME': os.environ.get('DB_NAME', 'saas_platform'),
+            'NAME': os.environ.get('DB_NAME', 'postgres'),
             'USER': os.environ.get('DN_USER', 'postgres'),
-            'PASSWORD': os.environ.get('DB_PASSWORD', ''),
+            'PASSWORD': os.environ.get('DB_PASSWORD', 'postgres'),
             'HOST': os.environ.get('DB_HOST', 'localhost'),
             'PORT': os.environ.get('DB_PORT', '5432'),
             'CONN_MAX_AGE': 600,
+            'ATOMIC_REQUESTS': True
         }
     }
     # Add tenant databases from environment or load dynamically
@@ -116,11 +117,6 @@ def get_databases():
     return databases
 
 DATABASES = get_databases()
-
-# Database router
-DATABASE_ROUTERS = [
-    'config.database_routers.HybridTenantRouter',
-]
 
 # Tenant settings
 TENANT_MODEL = 'tenant.Tenant'
@@ -157,6 +153,11 @@ USE_I18N = True
 
 USE_TZ = True
 
+# Database router
+DATABASE_ROUTERS = (
+    'django_tenants.routers.TenantSynceRouter',
+    'config.database_routers.HybridTenantRouter',
+)
 
 # Static files (CSS, JavaScript, Images)
 # https://docs.djangoproject.com/en/6.0/howto/static-files/
