@@ -29,7 +29,6 @@ DEBUG = True
 
 ALLOWED_HOSTS = []
 
-
 # Application definition
 # Shared apps and Tenant apps
 SHARED_APPS = [
@@ -62,11 +61,13 @@ TENANT_APPS = [
 ]
 
 # Rebuild INSTALLED_APPS
-INSTALLED_APPS = list(SHARED_APPS)
+INSTALLED_APPS = list(SHARED_APPS) + [
+    app for app in TENANT_APPS if app not in SHARED_APPS
+]
 
 MIDDLEWARE = [
-    'config.middleware.TenantDatabaseMiddleware',
     'django_tenants.middleware.main.TenantMainMiddleware',
+    'config.middleware.TenantDatabaseMiddleware',
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
@@ -104,7 +105,7 @@ def get_databases():
         'default': {
             'ENGINE': 'django_tenants.postgresql_backend',
             'NAME': os.environ.get('DB_NAME', 'postgres'),
-            'USER': os.environ.get('DN_USER', 'postgres'),
+            'USER': os.environ.get('DB_USER', 'postgres'),
             'PASSWORD': os.environ.get('DB_PASSWORD', 'postgres'),
             'HOST': os.environ.get('DB_HOST', 'localhost'),
             'PORT': os.environ.get('DB_PORT', '5432'),
@@ -155,7 +156,7 @@ USE_TZ = True
 
 # Database router
 DATABASE_ROUTERS = (
-    'django_tenants.routers.TenantSynceRouter',
+    'django_tenants.routers.TenantSyncRouter',
     'config.database_routers.HybridTenantRouter',
 )
 
