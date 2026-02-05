@@ -3,8 +3,9 @@ from django_tenants.utils import get_tenant_model, get_public_schema_name
 
 class HybridTenantRouter:
     # Database router for hybrid multi-tenant databases based on tenant type
+
     @staticmethod
-    def _get_tenant(self):
+    def _get_tenant():
         # Obtain current tenant
         from django.utils.deprecation import MiddlewareMixin
 
@@ -41,7 +42,8 @@ class HybridTenantRouter:
         return 'default'
 
     # Control database migrations
-    def allow_migrate(self, db, app_label, model_name=None):
+    @staticmethod
+    def allow_migrate(db, app_label, model_name=None):
         # Default for shared apps
         if app_label in settings.SHARED_APPS:
             return db == 'default'
