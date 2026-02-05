@@ -65,6 +65,7 @@ TENANT_APPS = [
 INSTALLED_APPS = list(SHARED_APPS)
 
 MIDDLEWARE = [
+    'config.middleware.TenantDatabaseMiddleware',
     'django_tenants.middleware.main.TenantMainMiddleware',
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
