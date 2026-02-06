@@ -1,4 +1,3 @@
-from celery.concurrency import custom
 from django.db import connections
 from django.utils.deprecation import MiddlewareMixin
 from django_tenants.utils import get_tenant_model
@@ -22,7 +21,9 @@ class TenantDatabaseMiddleware(MiddlewareMixin):
         return None
 
     # Extract tenant from request hostname
-    def get_tenant_from_request(self, request):
+    @staticmethod
+    def get_tenant_from_request(request):
+        global tenantModel
         hostname = request.get_host().split(':')[0]
         domain_parts = hostname.split('.')
 
@@ -35,15 +36,15 @@ class TenantDatabaseMiddleware(MiddlewareMixin):
         subdomain = domain_parts[0]
 
         try:
-            TenantModel = get_tenant_model()
-            tenant = TenantModel.objects.get(
+            tenantModel = get_tenant_model()
+            tenant = tenantModel.objects.get(
                 subdomain=subdomain,
                 status='active',
             )
             return tenant
-        except TenantModel.DoesNotExist:
+        except tenantModel.DoesNotExist:
             #Check custom domain
-            tenant = TenantModel.objects.filter(
+            tenant = tenantModel.objects.filter(
                 custom_domain=hostname,
                 status='active',
             ).first
