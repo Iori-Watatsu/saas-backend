@@ -1,7 +1,7 @@
-from django.db import connections
 from django.utils.deprecation import MiddlewareMixin
 from django_tenants.utils import get_tenant_model
 from .database_connections import DatabaseConnectionManager
+
 
 # Tenant type based database connections for Middleware setup
 class TenantDatabaseMiddleware(MiddlewareMixin):
