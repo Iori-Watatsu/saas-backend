@@ -1,4 +1,3 @@
-from celery.worker.control import reserved
 from rest_framework import serializers
 from .models import Tenant
 from.models import Tenant, Domain
@@ -45,12 +44,14 @@ class TenantSerializer(serializers.ModelSerializer):
             'domain'
         ]
 
-    def get_database_type(selfself, obj):
+    @staticmethod
+    def get_database_type(obj):
         if obj.tenant_type == 'premium':
             return 'Dedicated database'
         return 'Shared schema'
 
-    def get_user_count(selfself, obj):
+    @staticmethod
+    def get_user_count(obj):
         try:
             from django_tenants.utils import tenant_context
 
@@ -63,7 +64,8 @@ class TenantSerializer(serializers.ModelSerializer):
         except:
             return 'Unkown'
 
-    def get_projects_count(self, obj):
+    @staticmethod
+    def get_projects_count(obj):
         try:
             from django_tenants.utils import tenant_context
 
@@ -76,17 +78,19 @@ class TenantSerializer(serializers.ModelSerializer):
         except:
             return 'Unknown'
 
-    def get_domain(self, obj):
+    @staticmethod
+    def get_domain(obj):
         try:
             primary_domain = Domain.objects.filter(
                 tenant = obj,
                 is_primary = True
             ).first()
             return primary_domain.doamin if primary_domain else None
+
         except:
             return None
 
-    def validate_subdomain(selfself, value):
+    def validate_subdomain(self, value):
         import re
 
         value = value.lower()
@@ -150,18 +154,57 @@ class TenantSerializer(serializers.ModelSerializer):
             tenant.plan_change_date = timezone.now()
             tenant.plan_change_note = f"Downgraded from {old_plan} to {new_plan}"
 
-            self.schedule_downgrande_migration(tenant, old_plan, new_plan)
+            self.schedule_downgrade_migration(tenant, old_plan, new_plan)
 
         tenant.save()
 
     # A celery async database trigger task in production, this is logging just for dev
-    def trigger_database_creation(self, tenant):
+    @staticmethod
+    def trigger_database_creation(tenant):
         import logging
         logger = logging.getLogger(__name__)
         logger.info(f"Triggered tenant database creation {tenant.subdomain}")
 
     #Schedule database migration for schema downgrades
-    def shcedule_downgrade_mirgration(selfself, tenant, old_plan, new_plan):
+    @staticmethod
+    def shcedule_downgrade_mirgration(tenant):
         import logging
         logger = logging.getLogger(__name__)
         logger.info(f"Sheduling migration downgrade for{tenant.subdomain}")
+
+# Domain Model Serializer
+class DomainSerializer(serializers.ModelSerializer):
+    tenant_name = serializers.CharField(source='tenant.companyname', read_only=True)
+
+    class Meta:
+        model = Domain
+        fields = [
+            'id',
+            'domain',
+            'tenant',
+            'tenant_name',
+            'is_primary',
+            'is_custom',
+            'created_at',
+        ]
+        read_only_fields = ['id', 'created_at']
+
+        def __init__(self):
+            self.instance = None
+
+        def validate_domain(self, value):
+            import re
+
+            if not re.match(r'^[a-zA-Z0-9]([a-zA-Z0-9\-\.]*[a-zA-Z0-9])?\.[a-zA-Z]{2,}$', value):
+                raise serializers.ValidationError("Enter a valid domain name")
+
+            # Checkdomain registration
+            instance = self.instance
+            if instance:
+                if Domain.objects.exlude(id=instance.id).filter(domain=value).exists():
+                    raise serializers.ValidationError(f"Domain '{value}' aldready registered")
+            else:
+                if Domain.objects.filter(domain=value).exists():
+                    raise serializers.ValidationError(f"Domain '{value}' already registered")
+
+            return value.lower()
