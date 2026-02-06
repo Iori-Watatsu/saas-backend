@@ -208,3 +208,35 @@ class DomainSerializer(serializers.ModelSerializer):
                     raise serializers.ValidationError(f"Domain '{value}' already registered")
 
             return value.lower()
+
+# Tenant stats serializer
+class TenantStatsSerializer(serializers.Serializer):
+    id = serializers.UUIDField(read_only=True)
+    name = serializers.CharField(read_only=True)
+    subdomain = serializers.CharField(read_only=True)
+    plan = serializers.CharField(read_only=True)
+    tenant_type = serializers.CharField(read_only=True)
+    status = serializers.CharField(read_only=True)
+
+    user_count = serializers.IntegerField(read_only=True)
+    project_count = serializers.IntegerField(read_only=True)
+    task_count = serializers.IntegerField(read_only=True)
+
+    created_at = serializers.DateTimeField(read_only=True)
+    days_active = serializers.IntegerField(read_only=True)
+
+    database_size = serializers.CharField(read_only=True, allow_null=True)
+    last_backup = serializers.DateTimeField(read_only=True, allow_null=True)
+
+    # Stats rep
+    def to_representation(self, instance):
+        from django.utils import timezone
+
+        data = super().to_representation(instance)
+
+        # Calc active days
+        if instance.created_at:
+            days_active = (timezone.now() - instance.created_at).days
+            data['days_active'] = days_active
+
+        return data
