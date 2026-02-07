@@ -5,7 +5,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from config.database_connections import DatabaseConnectionManager
 from .models import Tenant, Domain
-from .serializers import TenantSerializer, PremiumTenantSingupSerializer
+from .serializers import TenantSerializer, PremiumTenantSignupSerializer
 
 
 # Create your views here.
@@ -24,7 +24,7 @@ class TenantView(viewsets.ModelViewSet):
 
     # Upgrade tenant to premium plan
     @action(detail=True, methods=['post'])
-    def upgrade_to_premium(self, request, pk=None):
+    def upgrade_to_premium(self, request, ):
         tenant = self.get_object()
 
         if tenant.tenant_type == 'premium':
@@ -63,75 +63,73 @@ class TenantView(viewsets.ModelViewSet):
         # research data migration
         pass
 
-    # Seperate database premium tenant signup API
-    class PremiumTenantSignupView(APIView):
-        permission_classes = [permissions.AllowAny]
+# Seperate database premium tenant signup API
+class PremiumTenantSignupView(APIView):
+    permission_classes = [permissions.AllowAny]
 
-        def post(self, request):
-            serializer = PremiumTenantSingupSerializer(data=request.data)
+    def post(self, request):
+        serializer = PremiumTenantSignupSerializer(data=request.data)
 
-            # validate subdomain availability
-            if serializer.is_valid():
-                subdomain = serializer.validated_data['subdomain']
-                if Tenant.objects.filter(subdomain=subdomain).exists():
-
-                    return Response(
-                        {'error': 'Subdomain already taken'},
-                        status=status.HTTP_400_BAD_REQUEST
-                    )
-
-                # Create premium tenant
-                tenant = Tenant(
-                    name=serializer.validated_data['company_name'],
-                    subdomain=subdomain,
-                    plan='professional',
-                    tenant_type='premium',
-                    schema_name=subdomain,
-                    auto_create_schema=False
+        # validate subdomain availability
+        if serializer.is_valid():
+            subdomain = serializer.validated_data['subdomain']
+            if Tenant.objects.filter(subdomain=subdomain).exists():
+                return Response(
+                    {'error': 'Subdomain already taken'},
+                    status=status.HTTP_400_BAD_REQUEST
                 )
-                tenant.save()
 
-                # Create database
-                success = DatabaseConnectionManager.create_tenant_database(tenant)
+            # Create premium tenant
+            tenant = Tenant(
+                name=serializer.validated_data['company_name'],
+                subdomain=subdomain,
+                plan='professional',  # Start with professional
+                tenant_type='premium',
+                schema_name=subdomain,
+                auto_create_schema=False
+            )
+            tenant.save()
 
-                if not success:
-                    tenant.delete()
-                    return Response(
-                        {'error': 'Failed to create tenant databse'},
-                        status=status.HTTP_500_INTERNAL_SERVER_ERROR
-                    )
+            # Create database
+            success = DatabaseConnectionManager.create_tenant_database(tenant)
 
-                # Create domain
-                domain = Domain(
-                    domain=f"{subdomain}.yourdomain.com",
-                    tenant=tenant,
-                    is_primary=True
+            if not success:
+                tenant.delete()
+                return Response(
+                    {'error': 'Failed to create tenant database'},
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR
                 )
-                domain.save()
 
-                # Create new database admin
-                from django.contrib.auth import get_user_model
-                User = get_user_model()
+            # Create domain
+            domain = Domain(
+                domain=f"{subdomain}.yourdomain.com",
+                tenant=tenant,
+                is_primary=True
+            )
+            domain.save()
 
-                # USe premium tenat context
-                from config.tenant_context import premium_tenant_context
+            # Create new database admin
+            from django.contrib.auth import get_user_model
+            User = get_user_model()
 
-                with premium_tenant_context(tenant):
-                    user = User.objects.create_user(
-                        email=serializer.validated_data['admin_email'],
-                        password=serializer.validated_data['password'],
-                        first_name=serializer.validated_data['first_name'],
-                        last_name=serializer.validated_data['last_name'],
-                        is_staff=True,
-                        is_superuser=True
-                    )
+            # USe premium tenat context
+            from config.tenant_context import premium_tenant_context
+            with premium_tenant_context(tenant):
+                user = User.objects.create_user(
+                    email=serializer.validated_data['admin_email'],
+                    password=serializer.validated_data['password'],
+                    first_name=serializer.validated_data['first_name'],
+                    last_name=serializer.validated_data['last_name'],
+                    is_staff=True,
+                    is_superuser=True
+                )
 
-                    return Response({
-                        'message': 'Premium tenant created successfully',
-                        'tenant_id': str(tenant.id),
-                        'subdomain': tenant.subdomain,
-                        'database': tenant.database_name,
-                        'admin_email': user.email
-                    }, status=status.HTTP_201_CREATED)
+            return Response({
+                'message': 'Premium tenant created successfully',
+                'tenant_id': str(tenant.id),
+                'subdomain': tenant.subdomain,
+                'database': tenant.database_name,
+                'admin_email': user.email
+            }, status=status.HTTP_201_CREATED)
 
-                return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
