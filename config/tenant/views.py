@@ -1,16 +1,11 @@
 from rest_framework import viewsets, permissions, status
 from rest_framework.authentication import TokenAuthentication
-from rest_framework.permissions import IsAuthenticatedOrReadOnly
-from rest_framework.utils.representation import serializer_repr
-
+from rest_framework.decorators import action
+from rest_framework.response import Response
+from rest_framework.views import APIView
+from config.database_connections import DatabaseConnectionManager
 from .models import Tenant, Domain
 from .serializers import TenantSerializer, PremiumTenantSingupSerializer
-from rest_framework.views import APIView
-from rest_framework.response import Response
-from rest_framework.decorators import action
-from django.core.validators import validate_email
-from django.core.exceptions import ValidationError
-from config.database_connections import DatabaseConnectionManager
 
 
 # Create your views here.
