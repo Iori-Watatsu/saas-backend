@@ -1,3 +1,4 @@
+from celery.worker.state import reserved_requests
 from rest_framework import serializers
 from .models import Tenant
 from.models import Tenant, Domain
@@ -240,3 +241,174 @@ class TenantStatsSerializer(serializers.Serializer):
             data['days_active'] = days_active
 
         return data
+
+# Seperate database premium tenant signup serializer
+class PremiumTenantSingupSerializer(serializers.Serializer):
+    # Comapany Info
+    name = serializers.CharField(
+        max_length=100,
+        required=True,
+        help_text="Name of your company/organization"
+    )
+
+    subdomain = serializers.CharField(
+        max_length=100,
+        read_only=True,
+        help_text="Unique subdomain (letters, numbers, hyphens only)"
+    )
+
+    plan = serializers.ChoiceField(
+        choices=[
+            ('professional', 'Professional - Separate Database'),
+            ('enterprise', 'Enterprise - Dedicated Database with SLA'),
+        ],
+        required=True,
+        default='professional',
+        help_text="Choose your premiujm plan"
+    )
+
+    # Required admin info
+    admin_email = serializers.EmailField(
+        required=True,
+        help_text="Admisin user email address"
+    )
+
+    admin_password = serializers.CharField(
+        max_length=128,
+        write_only=True,
+        required=True,
+        min_length=16,
+        help_text="Admin password (min 16 characters)"
+    )
+
+    confirm_password = serializers.CharField(
+        max_length=128,
+        write_only=True,
+        required=True,
+        help_text="Confirm admin password"
+    )
+
+    admin_first_name = serializers.CharField(
+        max_length=100,
+        required=True,
+        help_text="Admin first name"
+    )
+
+    admin_last_name = serializers.CharField(
+        max_length=100,
+        required=True,
+        help_text="Admin last name"
+    )
+
+    # Billing info
+    billing_email = serializers.EmailField(
+        required=False,
+        allow_blank=True,
+        help_text="Billing contact email (default to admin email)"
+    )
+
+    # Optional: Custom domain
+    custom_domain = serializers.CharField(
+        max_length=100,
+        required=False,
+        allow_blank=True,
+        help_text="Optional custom domain (e.g., app.yourcompany.com)"
+    )
+
+    # terms and conditions
+    accept_terms = serializers.BooleanField(
+        required=True,
+        error_messages={
+            'required': 'You must accept the terms and conditions'
+        },
+        help_text="Accept terms and conditions"
+    )
+
+    @staticmethod
+    def validate_subdomain(value):
+        import re
+
+        value = value.lower()
+
+        # validate length
+        if len(value) < 3:
+            raise serializers.ValidationError("Subdomain must be at least 3 characters long")
+
+        if len(value) > 63:
+            raise serializers.ValidationError("Subdomain cannot exceed 100 characters")
+
+        # Validate allowed characters
+        if not re.match(r'^[a-z0-9]([a-z0-9\-]*[a-z0-9])?$', value):
+            raise serializers.ValidationError(
+                "Subdomain can only contain lowercase letters, numbers, and hyphens. "
+                "Cannot start or end with a hyphen."
+            )
+
+        # validate reserved subdomains
+        reserved_subdomains = [
+            'www', 'admin', 'api', 'app', 'dashboard', 'mail', 'blog',
+            'support', 'help', 'status', 'dev', 'test', 'staging', 'prod'
+        ]
+
+        if value in reserved_subdomains:
+            raise serializers.ValidationError(f"Subdomain '{value}' is reserved")
+
+        # Validate if subdomain exists
+        if Tenant.objects.filter(subdomain=value).exists():
+            raise serializers.ValidationError(f"Subdomain '{value}' already taken")
+
+        # Database availibility
+        db_name = f"tenant_{value}"
+
+        if Tenant.objects.filter(database_name=db_name).exists():
+            raise serializers.ValidationError(f"Database name '{db_name}' already in use. Please choose a different subdomain.")
+
+        if len(db_name) > 63:
+            raise serializers.ValidationError(
+                f"Subdomain is too long. Database name would be {len(db_name)} characters (max 63)."
+            )
+
+        return value
+
+    # Validate passwd strength
+    @staticmethod
+    def validate_admin_password(value):
+        if len(value) < 16:
+            raise serializers.ValidationError("Password must be at least 16 characters long")
+
+        # Check complexity
+        has_upper = any(c.isupper() for c in value)
+        has_lower = any(c.islower() for c in value)
+        has_digit = any(c.isdigit() for c in value)
+
+        if not (has_upper and has_lower and has_digit):
+            raise serializers.ValidationError(
+                "Password must contain at least one uppercase letter, "
+                "one lowercase letter, and one number"
+            )
+
+        return value
+
+    # Validate password confirmation
+    def validate(self, data):
+        if data.get('admin_password') != data.get('confirm_password'):
+            raise serializers.ValidationError({
+                'confirm_password': "Passwords do not match"
+            })
+
+        # Set billing email to admin email if not provide
+        if not data.get('billin_email') and data.get('admin_email'):
+            data['billing_email'] = data['admin_email']
+
+        # Term acceptance validation
+        if not data.get('accept_terms'):
+            raise serializers.ValidationError({
+                'accept_terms': "You must accept the terms and conditions"
+            })
+
+        return data
+
+    # Creation will be handled by the view validated data
+    def create(self, validated_data):
+#       !!!...#########...!!!
+        return validated_data

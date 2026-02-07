@@ -3,7 +3,7 @@ from django.db import models
 from django_tenants.models import TenantMixin, DomainMixin
 
 # Create your models here.
-class Tenant(models.Model):
+class Tenant(TenantMixin):
     objects = models.Manager
     # Use Universally Unique Identifiers for individual tenant's global uniqueness, ehanced security and data merging without id collisions.
     id = models.UUIDField(default=uuid4, unique=True, primary_key=True, editable=False)
@@ -111,6 +111,7 @@ class Tenant(models.Model):
 
 class Domain(DomainMixin):
     # Domains model for tenant URLs
+    objects = None
     is_custom = models.BooleanField(default=False)
 
     class Meta:
