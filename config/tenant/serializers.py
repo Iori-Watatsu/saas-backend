@@ -243,7 +243,7 @@ class TenantStatsSerializer(serializers.Serializer):
         return data
 
 # Seperate database premium tenant signup serializer
-class PremiumTenantSingupSerializer(serializers.Serializer):
+class PremiumTenantSignupSerializer(serializers.Serializer):
     # Comapany Info
     name = serializers.CharField(
         max_length=100,
