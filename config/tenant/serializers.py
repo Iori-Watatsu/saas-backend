@@ -412,3 +412,34 @@ class PremiumTenantSingupSerializer(serializers.Serializer):
     def create(self, validated_data):
 #       !!!...#########...!!!
         return validated_data
+
+#Tenant creation response serializer
+class TenantCreationResponseSerializer(serializers.Serializer):
+
+    success = serializers.BooleanField(default=True)
+    message = serializers.CharField()
+    tenant_id = serializers.UUIDField()
+    subdomain = serializers.CharField()
+    admin_email = serializers.CharField()
+    database_name = serializers.CharField(allow_null=True)
+    dashboard_url = serializers.CharField()
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+
+        # Helpful links
+        data['links'] = {
+            'dashboard': instance['dashboard_url'],
+            'api_docs': f"https://{instance['subdomain']}.yourdomain.com/api/docs/",
+            'support': 'https://support.yourdomain.com/',
+        }
+
+        # Next steps
+        data['next_steps'] = [
+            "Check your email for verification",
+            "Log in to your new dashboard",
+            "Invite team members",
+            "Set up your first project",
+        ]
+
+        return data
