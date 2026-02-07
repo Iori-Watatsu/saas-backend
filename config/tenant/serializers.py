@@ -443,3 +443,53 @@ class TenantCreationResponseSerializer(serializers.Serializer):
         ]
 
         return data
+
+# Tenant plan upgarde serializers
+class PlanUpgradeSerializer(serializers.Serializer):
+    new_plan = serializers.ChoiceField(
+        choices=[
+            ('starter', 'Starter'),
+            ('professional', 'Professional'),
+            ('enterprise', 'Enterprise'),
+        ],
+        required=True
+    )
+
+    billing_cycle = serializers.ChoiceField(
+        choices=[
+            ('monthly', 'Monthly'),
+            ('annual', 'Annual (Save 20%)'),
+        ],
+        default='monthly',
+        required=True
+    )
+
+    agree_to_price_change = serializers.BooleanField(
+        required=True,
+        error_messages={
+            'required': 'You must agree to the price change'
+        }
+    )
+
+    # Validate plan change
+    def validate(self, data):
+        tenant = self.context['tenant']
+        current_plan = tenant.plan
+
+        # Prevent invalid upgrades
+        if current_plan == 'enterprise' and data['new_plan'] != 'enterprise':
+            raise serializers.ValidationError({
+                'new_plan': 'You are already on the Enterprise plan.'
+            })
+
+        # Check for actual upgrade
+        plan_order = ['free', 'starter', 'professional', 'enterprise']
+        current_index = plan_order.index(current_plan)
+        new_index = plan_order.index(data['new_plan'])
+
+        if new_index <= current_index:
+            raise serializers.ValidationError({
+                'new_plan': f"New plan must be higher than current plan({current_plan})"
+            })
+
+        return data
