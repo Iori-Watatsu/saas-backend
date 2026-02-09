@@ -1,6 +1,8 @@
 from django.db import models
-from django.contrib.auth.models import BaseUserManager
-
+from django.contrib.auth.models import BaseUserManager, AbstractUser
+from uuid import uuid4
+from django.conf import settings
+from django.utils.translation import gettext_lazy as _
 
 # Create your models here.
 
@@ -17,7 +19,7 @@ class CustomUserManager(BaseUserManager):
         return user
 
     # Create superuser
-    def create_superuser(self, email, passowrd=None, **extra_fields):
+    def create_superuser(self, email, password=None, **extra_fields):
         extra_fields.setdefault('is_staff', True)
         extra_fields.setdefault('is_superuser', True)
         extra_fields.setdefault('is_active', True)
@@ -28,4 +30,245 @@ class CustomUserManager(BaseUserManager):
         if extra_fields.get('is_superuser') is not True:
             raise ValueError('Superuser must have is_superuser=True')
 
-        return self.create_user(email, passowrd, **extra_fields)
+        return self.create_user(email, password, **extra_fields)
+
+class CustomUser(AbstractUser):
+    username = None # Uses email as identifier
+    id = models.UUIDField(
+        default=uuid4,
+        unique=True,
+        primary_key=True,
+        editable=False,
+        verbose_name=_('ID'),
+    )
+    tenant_id = models.UUIDField(
+        'tenan.Tenant', # Created seperately
+        on_delete=models.CASCADE,
+        related_name='users',
+        verbose_name=_('Tenant'),
+        help_text=_('The tenant/organization this user belongs to')
+    )
+    email = models.EmailField(
+        _('email address'),
+        max_length=255,
+        unique=True,
+        blank=False,
+        null=False,
+        help_text=_('User email address (used for login)')
+    )
+    first_name = models.CharField(
+        _('first name'),
+        max_length=100,
+        blank=False,
+        null=False,
+        help_text=_('User first name')
+    )
+    last_name = models.CharField(
+        _('last name'),
+        max_length=100,
+        blank=False,
+        null=False,
+        help_text=_('User last name')
+    )
+    ROLE_CHOICES = [
+        ('owner', _('Owner')),
+        ('admin', _('Administrator')),
+        ('manager', _('Manager')),
+        ('member', _('Member')),
+        ('viewer', _('Viewer')),
+        ('guest', _('Guest')),
+    ]
+    role = models.CharField(
+        _('role'),
+        max_length=50,
+        choices=ROLE_CHOICES,
+        default='member',
+        blank=False,
+        null=False,
+        help_text=_('User role within the tenant/organization')
+    )
+    STATUS_CHOICES = [
+        ('active', _('Active')),
+        ('inactive', _('Inactive')),
+        ('suspended', _('Suspended')),
+        ('invited', _('Invited')),
+        ('pending', _('Pending Approval')),
+    ]
+    status = models.CharField(
+        _('status'),
+        max_length=50,
+        choices=STATUS_CHOICES,
+        default='active',
+        blank=False,
+        null=False,
+        help_text=_('User account status')
+    )
+    phone = models.CharField(
+        _('phone number'),
+        max_length=20,
+        blank=True,
+        null=True,
+        help_text=_('User phone number')
+    )
+    title = models.CharField(
+        _('job title'),
+        max_length=100,
+        blank=True,
+        null=True,
+        help_text=_('User job title')
+    )
+    department = models.CharField(
+        _('department'),
+        max_length=100,
+        blank=True,
+        null=True,
+        help_text=_('User department')
+    )
+    email_verified = models.BooleanField(
+        _('email verified'),
+        default=False,
+        help_text=_('Whether the user has verified their email')
+    )
+    last_activity = models.DateTimeField(
+        _('last activity'),
+        auto_now=True,
+        help_text=_('Last user activity timestamp')
+    )
+    login_attempts = models.IntegerField(
+        _('login attempts'),
+        default=0,
+        help_text=_('Number of failed login attempts')
+    )
+    locked_until = models.DateTimeField(
+        _('locked until'),
+        blank=True,
+        null=True,
+        help_text=_('Account locked until this time')
+    )
+    USERNAME_FIELD = 'email'
+    REQUIRED_FIELDS = ['first_name', 'last_name', 'tenant']
+
+    objects = CustomUserManager()
+
+    class Meta:
+        db_table = 'users'
+        verbose_name = _('User')
+        verbose_naem_plural = _('Users')
+
+        # These contraints allow for same email in defferent tenants
+        constraints = [
+            models.UniqueConstraint(
+                fields=['tenant', 'email'],
+                name='unique_email_per_tenant'
+            )
+        ]
+        indexes = [
+            models.Index(fields=['tenant', 'email']),
+            models.Index(fields=['tenant', 'status']),
+            models.Index(fields=['tenant', 'role']),
+            models.Index(fields=['email']),
+            models.Index(fields=['date_joined']),
+        ]
+
+    def __str__(self):
+        return self.email # Unique identifier
+
+    @property
+    def full_name(self):
+        return f"{self.first_name} {self.last_name}".strip() # Return suser full name
+
+    @property
+    def is_tenant_owner(self):
+        return self.role == 'owner' # Checks if tenant is owner
+
+    @property
+    def is_tenant_admin(self):
+        return self.role in ['owner', 'admin'] # Checks admin privileges
+
+    def can_access_tenant(self, tenant):
+        return self.tenant_id == tenant.id # Checks user acces to specif tenants
+
+    # Reset failed login attempts
+    def reset_login_attemtps(self):
+        self.login_attempts = 0
+        self.locked_until = None
+        self.save(update_fields=['login_attempts', 'locked_until'])
+
+    # Incerement failed attemps
+    def increment_login_attempts(self):
+        self.login_attempts += 1
+
+        # Locked after 5 failed attempts for 30 mins
+        if self.login_attempts >= 5:
+            from django.utils import timezone
+            self.locked_until = timezone.now() + timezone.timedelta(minutes=30)
+
+            self.save(update_fields=['login_attempts', 'locked_until'])
+
+    # Check is account is locked
+    def is_account_locked(self):
+        if self.locked_until:
+            from django.utils import timezone
+            return timezone.now() < self.locked_until
+        return False
+
+    # Role based user permmisions:
+    def get_permissions(self):
+        permissions = {
+            'owner': {
+                'can_manage_users': True,
+                'can_manage_tenant': True,
+                'can_manage_projects': True,
+                'can_manage_tasks': True,
+                'can_view_analytics': True,
+                'can_export_data': True,
+                'can_manage_billing': True,
+            },
+            'admin': {
+                'can_manage_users': True,
+                'can_manage_tenant': False,
+                'can_manage_projects': True,
+                'can_manage_tasks': True,
+                'can_view_analytics': True,
+                'can_export_data': True,
+                'can_manage_billing': False,
+            },
+            'manager': {
+                'can_manage_users': False,
+                'can_manage_tenant': False,
+                'can_manage_projects': True,
+                'can_manage_tasks': True,
+                'can_view_analytics': True,
+                'can_export_data': False,
+                'can_manage_billing': False,
+            },
+            'member': {
+                'can_manage_users': False,
+                'can_manage_tenant': False,
+                'can_manage_projects': False,
+                'can_manage_tasks': True,
+                'can_view_analytics': False,
+                'can_export_data': False,
+                'can_manage_billing': False,
+            },
+            'viewer': {
+                'can_manage_users': False,
+                'can_manage_tenant': False,
+                'can_manage_projects': False,
+                'can_manage_tasks': False,
+                'can_view_analytics': False,
+                'can_export_data': False,
+                'can_manage_billing': False,
+            },
+            'guest': {
+                'can_manage_users': False,
+                'can_manage_tenant': False,
+                'can_manage_projects': False,
+                'can_manage_tasks': False,
+                'can_view_analytics': False,
+                'can_export_data': False,
+                'can_manage_billing': False,
+            },
+        }
+
+        return permissions.get(self.role, {})
