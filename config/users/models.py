@@ -1,8 +1,8 @@
-from django.db import models
-from django.contrib.auth.models import BaseUserManager, AbstractUser
 from uuid import uuid4
-from django.conf import settings
+from django.contrib.auth.models import BaseUserManager, AbstractUser
+from django.db import models
 from django.utils.translation import gettext_lazy as _
+
 
 # Create your models here.
 
@@ -41,7 +41,7 @@ class CustomUser(AbstractUser):
         editable=False,
         verbose_name=_('ID'),
     )
-    tenant_id = models.UUIDField(
+    tenant = models.ForeignKey(
         'tenan.Tenant', # Created seperately
         on_delete=models.CASCADE,
         related_name='users',
