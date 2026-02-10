@@ -3,6 +3,7 @@ import secrets
 from django.contrib.auth.hashers import BasePasswordHasher, mask_hash
 from django.core.exceptions import ImproperlyConfigured
 import logging
+import bcrypt
 
 logger = logging.getLogger(__name__)
 
@@ -19,7 +20,7 @@ class TenantAwarePasswordHasher(BasePasswordHasher):
         if not self.tenant:
             return default
 
-        tenant_config = getattr(self.tenant, 'password_hashin_config', {})
+        tenant_config = getattr(self.tenant, 'password_hashing_config', {})
         if not tenant_config:
             tenant_config = {}
 
@@ -27,8 +28,8 @@ class TenantAwarePasswordHasher(BasePasswordHasher):
 
 # Argon2 password hasher tenant specific config
 class Argon2TenantHasher(TenantAwarePasswordHasher):
-    algorithm = argon2
-    library = argon2
+    algorithm = 'argon2'
+    library = 'argon2'
 
     # Defalut config
     DEFAULT_TIME_COST = 2
@@ -74,7 +75,7 @@ class Argon2TenantHasher(TenantAwarePasswordHasher):
         return hash_string
 
     # Decode and verify password agaisnt argon2 hash
-    def veirfy(self, password, encoded):
+    def verify(self, password, encoded):
         try:
             if encoded.startswith(f"{self.algorithm}$"):
                 encoded = encoded[len(f"{self.algorithm}$"):]
@@ -120,6 +121,7 @@ class Argon2TenantHasher(TenantAwarePasswordHasher):
                 'algorithm': self.algorithm,
                 'type': argon2_type,
                 'version': version_value,
+                'time_cost': params_dict.get('t', 'unknown'),
                 'memory_cost': f"{params_dict.get('m', 'unknown')} MB",
                 'parallelism': params_dict.get('p', ' unknown'),
                 'salt': mask_hash(salt),
@@ -128,3 +130,94 @@ class Argon2TenantHasher(TenantAwarePasswordHasher):
         except Exception as e:
             logger.error(f"Error parsing Argon2 hash: {e}")
         return {'algorithm': self.algorithm, 'error': 'Parse error'}
+
+# Bcrypt password hasher tenant specific config
+class BcryptTenantHasher(TenantAwarePasswordHasher):
+    algorithm = 'bcrypt'
+    library = ('bcrypt', 'bcrypt')
+    rounds = 12 # cost default
+
+    # Bcrypt passowrd encoding
+    def encode(self, password, salt=None):
+        #bcrypt = self._load_library()
+
+        # Tenant specific rounds
+        rounds = self.get_tenant_config('bcrypt_rounds', self.rounds)
+        rounds = max(4, min(31, rounds))
+
+        # Salt generation if not provided
+        if salt is None:
+            salt = bcrypt.gensalt(rounds=rounds)
+        else:
+            #Ensure salt in bytes
+            if  isinstance(salt, str):
+                salt = salt.encode('utf-8')
+
+        # Password hashing
+        data = bcrypt.hashpw(password.encode('utf-8'), salt)
+
+        # Bcrypt format: bcrypt$encoded
+        return f"{self.algorithm}${data.decode('utf-8')}"
+
+    # Decode and verify password agaisnt bcrypt hash
+    def verify(self, password, encoded):
+        #bcrypt = self._load_library()
+
+        if encoded.startswith(f"{self.algorithm}$"):
+            encoded = encoded[len(f"{self.algorithm}$"):]
+
+        try:
+            password_bytes = password.encode('utf-8')
+            encoded_bytes = encoded.encode('utf-8')
+
+            result = bcrypt.checkpw(password_bytes, encoded_bytes)
+            return result
+        except (ValueError, TypeError):
+            return False
+
+    # Hash debugging summary
+    def safe_summary(self, encoded):
+        if encoded.startswith(f"{self.algorithm}$"):
+            encoded = encoded[len(f"{self.algorithm}$"):]
+
+        if encoded.startswith('$2'):
+            # bcrypt hash format: $2b$12$saltsaltsaltsaltsalthashhashhashhashhash
+            parts = encoded.split('$')
+
+            if len(parts) == 4:
+                version = parts[1]
+                rounds = parts[2]
+                salt_and_hash = parts[3]
+
+                return {
+                    'algorithm': self.algorithm,
+                    'version': version,
+                    'rounds': rounds,
+                    'salt': mask_hash(salt_and_hash[:22]),
+                    'hash': mask_hash(salt_and_hash[22:]),
+                }
+
+        return {'algorithm': self.algorithm, 'error': 'Invalid hash format'}
+
+    ## Checks if hash needds update
+    def must_update(self, encoded):
+        if not self.tenant:
+            return False
+
+        if encoded.startswith(f"{self.algorithm}$"):
+            encoded = encoded[len(f"{self.algorithm}$"):]
+
+        if encoded.startswith('$2'):
+            parts = encoded.split('$')
+
+            if len(parts) == 4:
+                try:
+                    current_rounds = int(parts[2])
+
+                    preferred_rounds = self.get_tenant_config('bcrypt_rounds', self.rounds)
+
+                    return current_rounds < preferred_rounds
+                except (ValueError, IndexError):
+                    return False
+
+        return False
