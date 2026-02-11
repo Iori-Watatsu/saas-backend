@@ -4,6 +4,10 @@ from django.contrib.auth.hashers import BasePasswordHasher, mask_hash
 from django.core.exceptions import ImproperlyConfigured
 import logging
 import bcrypt
+import scrypt
+import base64
+import math
+import binascii
 
 logger = logging.getLogger(__name__)
 
@@ -221,3 +225,163 @@ class BcryptTenantHasher(TenantAwarePasswordHasher):
                     return False
 
         return False
+
+# Bcrypt password hasher tenant specific config with memory-hard Key Derivation Function resisting GPU/ASIC attack
+class ScryptTenantHasher(TenantAwarePasswordHasher):
+    algorithm = 'scrypt'
+
+    DEFAULT_N = 2**14 # MEMORY COST FACTOR
+    DEFAULT_R = 8 # BLOCK SIZE
+    DEFAULT_P = 1 #PARALLELIZATION FACTOR
+    DEFAULT_KEY_LENGTH = 32 # 256-BIT OUTPUT
+    DEFAULT_SALT_LENGTH = 16
+
+    def __init__(self, *args, **kwaargs):
+        super().__init__(*args, **kwaargs)
+        self.scrypt = scrypt
+
+    # Scrypt password encoding
+    def encode(self, password, salt=None):
+        N = self.get_tenant_config('scrypt_N', self.DEFAULT_N)
+        r = self.get_tenant_config('scrypt_r', self.DEFAULT_R)
+        p = self.get_tenant_config('scrypt_p', self.DEFAULT_P)
+        key_length = self.get_tenant_config('scrypt_key_length', self.DEFAULT_KEY_LENGTH)
+        salt_length = self.get_tenant_config('scrypt_salt_length', self.DEFAULT_SALT_LENGTH)
+
+        # Salt generation if not provided
+        if salt is None:
+            salt = secrets.token_bytes(salt_length)
+        elif isinstance(salt, str):
+            salt = base64.b64decode(salt)
+
+        # Ensure correct salt length
+        if len(salt) != salt_length:
+            raise ValueError(f"Salt must be {salt_length} bytes")
+
+        # Scrypt hashing
+        try:
+            hash_bytes = self.scrypt.hash(
+                password.encode('utf-8'),
+                salt=salt,
+                N=N,
+                r=r,
+                p=p,
+                buflen=key_length
+            )
+        except MemoryError:
+            # Fallback to less memory-intensive parameters
+            logger.warning("Memory error in scrypt, using reduced parameters")
+            N = 2**12  # Reduce memory usage
+            hash_bytes = self.scrypt.hash(
+                password.encode('utf-8'),
+                salt=salt,
+                N=N,
+                r=r,
+                p=p,
+                buflen=key_length
+            )
+
+        # base64 salt and has encoding
+        salt_b64 = base64.b64encode(salt).decode('ascii')
+        hash_b64 = base64.b64encode(hash_bytes).decode('ascii')
+
+        # Scrypt format: scrypt$N,r,p$salt$hash
+        return f"{self.algorithm}${N},{r},{p}${salt_b64}${hash_b64}"
+
+    # Scrypt hash password decode and verification
+    def verify(self, password, encoded):
+        try:
+            if encoded.startswith(f"{self.algorithm}$"):
+                encoded = encoded[len(f"{self.algorithm}$"):]
+
+            parts = encoded.split('$')
+
+            if len(parts) != 3:
+                return False
+
+            params_str, salt_b64, hash_b64 = parts
+
+            params = params_str.split(',')
+            if len(params) != 3:
+                return False
+
+            N, r, p = map(int, params)
+
+            salt = base64.b64decode(salt_b64)
+            expected_hash = base64.b64decode(hash_b64)
+
+            computed_hash = self.scrypt.hash(
+                password.scrypt('utf-8'),
+                salt=salt,
+                N=N,
+                r=r,
+                p=p,
+                buflen=len(expected_hash),
+            )
+
+            return secrets.compare_digest(computed_hash, expected_hash)
+
+        except (ValueError, TypeError, binascii.Error):
+
+            return False
+    # Hash summary for debugging
+    def safe_summary(self, encoded):
+        if encoded.startswith(f"{self.algorithm}$"):
+            encoded = encoded[len(f"{self.algorithm}$"):]
+
+        parts = encoded.split('$')
+        if len(parts) != 3:
+            return {'algorithm': self.algorithm, 'error': 'Invalid has format'}
+
+        params_str, salt_b64, hash_b64 = parts
+
+        try:
+            params = params_str.split(',')
+            N, r, p = map(int, params)
+
+            if N > 0 and (N & (N - 1)) == 0: # Check power of 2
+                log_n = int(math.log2(N))
+                n_display = f"2^{log_n} ({N})"
+
+            else:
+                n_display = str(N)
+
+            return {
+                'algorithm': self.algorithm,
+                'N (CPU/memory cost)': n_display,
+                'r (block size)': r,
+                'p (parallelization)': p,
+                'salt': mask_hash(salt_b64),
+                'hash': mask_hash(hash_b64),
+            }
+        except(ValueError, IndexError):
+            return {'algorithm': self.algorithm, 'error': 'Invalid parameters'}
+
+    # Check for hash update
+    def must_update(self, encoded):
+        if not self.tenant:
+            return False
+        if encoded.startswith(f"{self.algorithm}$"):
+            encoded = encoded[len(f"{self.algorithm}$"):]
+
+        parts = encoded.split('$')
+        if len(parts) != 3:
+            return True
+
+        params_str = parts[0]
+        params = params_str.split(',')
+
+        try:
+            current_N, current_r, current_p = map(int, params)
+
+            preferred_N = self.get_tenant_config('scrypt_N', self.DEFAULT_N)
+            preferred_r = self.get_tenant_config('scrypt_r', self.DEFAULT_R)
+            preferred_p = self.get_tenant_config('scrypt_p', self.DEFAULT_P)
+
+            return (
+                current_N != preferred_N or
+                current_r != preferred_r or
+                current_p != preferred_p
+            )
+        except (ValueError, IndexError):
+            return True
