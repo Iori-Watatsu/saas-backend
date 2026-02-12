@@ -144,6 +144,15 @@ AUTH_PASSWORD_VALIDATORS = [
 
 AUTH_USER_MODEL = 'users.CustomUser'
 
+PASSWORD_HASHERS = [
+    'users.hashers.Argon2TenantHasher',
+    'users.hashers.BcryptTenantHasher',
+    'users.hashers.ScryptTenantHasher',
+    'users.hashers.PBKDF2TenantHasher',
+    'django.contrib.auth.hashers.PBKDF2PasswordHasher',
+    'django.contrib.auth.hashers.PBKDF2SHA1PasswordHasher',
+]
+
 
 # Internationalization
 # https://docs.djangoproject.com/en/6.0/topics/i18n/
