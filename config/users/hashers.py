@@ -1,6 +1,6 @@
 import argon2
 import secrets
-from django.contrib.auth.hashers import BasePasswordHasher, mask_hash
+from django.contrib.auth.hashers import BasePasswordHasher, mask_hash, PBKDF2PasswordHasher
 from django.core.exceptions import ImproperlyConfigured
 import logging
 import bcrypt
@@ -8,6 +8,7 @@ import scrypt
 import base64
 import math
 import binascii
+import hashlib
 
 logger = logging.getLogger(__name__)
 
@@ -385,3 +386,86 @@ class ScryptTenantHasher(TenantAwarePasswordHasher):
             )
         except (ValueError, IndexError):
             return True
+
+# PBKDF2 password hasher with tenant-specific configuration
+class PBKDF2TenantHasher(TenantAwarePasswordHasher):
+    algorithm = 'pbkdf_sha256_tenant'
+
+    DEFAULT_ITERATIONS = 260000 # Updated from 180000 for better security
+    DEFAULT_DIGEST = hashlib.sha256
+
+    # PBKDF@ password encoder
+    def encode(self, password, salt=None, iterations=None):
+        if iterations is None:
+            iterations = self.get_tenant_config('pbkdf2_iterations', self.DEFAULT_ITERATIONS)
+
+        # Get digest algorithm
+        digest = self.get_tenant_config('pbkdf2_digest', self.DEFAULT_DIGEST)
+
+        # Salt generations
+        if salt is None:
+            salt = secrets.token_urlsafe(12)[:16] # 12 bytes = 16 base64 chars
+
+        # Hash the password
+        hash_value = hashlib.pbkdf2_hmac(
+            digest().name,
+            password.encode('utf-8'),
+            self.encode('ascii'),
+            iterations
+        )
+        hash_b64 = base64.b64encode(hash_value).decode('ascii').strip()
+
+        # PBKDF2 format: algorithm$iterations$salt$hash
+        return f"{self.algorithm}${iterations}${salt}${hash_b64}"
+
+    def verify(self, password, encoded):
+        try:
+            if not encoded.startswith(f"{self.algorithm}$"):
+                return False
+
+            algorithm, iterations, salt, hash_value = encoded.split('$', 3)
+            iterations = int(iterations)
+
+            encoded_2 = self.encode(password, salt, iterations)
+
+            # Constant-time comparison
+            return secrets.compare_digest(encoded, encoded_2)
+
+        except (ValueError, TypeError):
+            return False
+
+    # Hash debugging summary
+    def safe_summary(self, encoded):
+        try:
+            if not encoded.startswith(f"{self.algorithm}$"):
+                return {'algorithm': self.algorithm, 'error': 'Invalid algorithm'}
+
+            algorithm, iterations, salt, hash_value = encoded.split('$', 3)
+
+            return {
+                'algorithm': self.algorithm,
+                'iterations': iterations,
+                'salt': mask_hash(salt),
+                'hash': mask_hash(hash_value),
+            }
+        except (ValueError, IndexError):
+            return {'algorithm': self.algorithm, 'error': 'Invalid hash format'}
+
+    def must_update(self, encoded):
+            if not self.tenant:
+                return False
+
+            try:
+                if not encoded.startswith(f"{self.algorithm}$"):
+                    return False
+
+                algorithm, iterations, salt, hash_value = encoded.split('$', 3)
+                current_iterations = int(iterations)
+
+                preferred_iterations = self.get_tenant_config('pbkdf2_iterations', self.DEFAULT_ITERATIONS)
+
+                # Update if current iterations are less than preferred
+                return current_iterations < preferred_iterations
+
+            except (ValueError, IndexError):
+                return True
