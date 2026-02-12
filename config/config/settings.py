@@ -13,6 +13,7 @@ https://docs.djangoproject.com/en/6.0/ref/settings/
 from pathlib import Path
 from examples.tenant_tutorial.tenant_tutorial.settings import TENANT_MODEL, SHARED_APPS
 import os
+import hashlib
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -149,10 +150,50 @@ PASSWORD_HASHERS = [
     'users.hashers.BcryptTenantHasher',
     'users.hashers.ScryptTenantHasher',
     'users.hashers.PBKDF2TenantHasher',
+
+    # Built-in fallback hashers
     'django.contrib.auth.hashers.PBKDF2PasswordHasher',
     'django.contrib.auth.hashers.PBKDF2SHA1PasswordHasher',
+    'django.contib.auth.hashers.Argon2PasswordHasher',
+    'django.contib.auth.hashers.BcryptSHA256PasswordHasher',
+    'django.contib.auth.hashers.ScryptPasswordHasher',
 ]
+PASSWORD_HASHING_CONFIG = {
+    'argon2': {
+        'time_cost': 2,
+        'memory_cost': 512,  # KB (not MB)
+        'parallelism': 2,
+        'hash_length': 16,
+        'salt_length': 16,
+    },
+    'bcrypt': {
+        'rounds': 12,
+    },
+    'scrypt': {
+        'N': 16384,  # Memory cost
+        'r': 8,      # Block size
+        'p': 1,      # Parallelization
+        'key_length': 32,
+        'salt_length': 16,
+    },
+    'pbkdf2_sha256': {
+        'iterations': 260000,
+        'digest': 'sha256',
+    },
+}
+# Password Policy Defaults
+PASSWORD_MIN_LENGTH = 16
+PASSWORD_MAX_LENGTH = 128
+PASSWORD_REQUIRE_UPPERCASE = True
+PASSWORD_REQUIRE_LOWERCASE = True
+PASSWORD_REQUIRE_DIGITS = True
+PASSWORD_REQUIRE_SPECIAL_CHARS = True
+PASSWORD_HISTORY_SIZE = 5
+PASSWORD_EXPIRY_DAYS = 90
 
+# Account sec defaults
+MAX_LOGIN_ATTEMPTS = 5
+LOCKOUT_DURATION_MINUTES = 30
 
 # Internationalization
 # https://docs.djangoproject.com/en/6.0/topics/i18n/
