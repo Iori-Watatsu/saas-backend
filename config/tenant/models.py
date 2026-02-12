@@ -4,6 +4,11 @@ from django_tenants.models import TenantMixin, DomainMixin
 
 # Create your models here.
 class Tenant(TenantMixin):
+    name: str
+    password_expiry_days: int
+    password_history_size: int
+    lockout_duration_minutes: int
+
     objects = models.Manager
     # Use Universally Unique Identifiers for individual tenant's global uniqueness, ehanced security and data merging without id collisions.
     id = models.UUIDField(default=uuid4, unique=True, primary_key=True, editable=False)
@@ -76,6 +81,102 @@ class Tenant(TenantMixin):
 
     def __str__(self):
         return f"{self.name} ({self.subdomain}) - {self.tenant_type}"
+
+    # Hashing algorithm choice
+    PASSWORD_HASHING_ALGORITHMS = [
+        ('argon2', 'Argon2'), # Recommended
+        ('bcrypt', 'Bcrypt'),
+        ('scrypt', 'Scrypt'),
+        ('pbkdf2_sha256_tenant', 'PBKDF2 SHA256')
+    ]
+
+    password_hashing_algorithm = models.CharField(
+        max_length=50,
+        choices=PASSWORD_HASHING_ALGORITHMS,
+        default='argon2',
+        help_text='Password hashing algorithm for this tenant'
+    )
+
+    password_hashing_config = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text='Algorithm-specific JSON config params'
+    )
+
+    # Password hash validation cofig
+    def clean(self):
+        from django.core.exceptions import ValidationError
+        import logging
+
+        logger = logging.getLogger(__name__)
+
+        super().clean()
+
+        config = self.password_hashing_config or {}
+
+        # Validate based on selected algorithm
+        if config:
+            valid_keys = {
+                'argon2': ['argon2_time_cost', 'argon2_memory_cost', 'argon2_parallelism',
+                           'argon2_hash_length', 'argon2_salt_length', 'argon2_type'],
+                'bcrypt': ['bcrypt_rounds'],
+                'scrypt': ['scrypt_N', 'scrypt_r', 'scrypt_p', 'scrypt_key_length',
+                           'scrypt_salt_length'],
+                'pbkdf2_sha256_tenant': ['pbkdf2_iterations', 'pbkdf2_digest'],
+            }
+
+            allowed_keys = valid_keys.get(self.password_hashing_algorithm, [])
+            invalid_keys = [k for k in config.keys() if k not in allowed_keys]
+
+            if invalid_keys:
+                raise ValidationError({
+                    'password_hashing_config': f"Invalid configuration keys for {self.password_hashing_algorithm}: {', '.join(invalid_keys)}"
+                })
+
+        # Password policy consistency validation
+        if self.password_expiry_days > 0 and self.password_history_size == 0:
+            logger.warning(
+                f"Tenant {self.name}: Password expiry is enabled but history is disabled. "
+                "Users can reuse the same password."
+            )
+
+    def get_default_hashing_config(self):
+        defaults = {
+            'argon2': {
+                'argon2_time_cost': 2,
+                'argon2_memory_cost': 512,
+                'argon2_parallelism': 2,
+                'argon2_hash_length': 16,
+                'argon2_salt_length': 16,
+            },
+            'bcrypt': {
+                'bcrypt_rounds': 12,
+            },
+            'scrypt': {
+                'scrypt_N': 16384,  # 2^14
+                'scrypt_r': 8,
+                'scrypt_p': 1,
+                'scrypt_key_length': 32,
+                'scrypt_salt_length': 16,
+            },
+            'pbkdf2_sha256_tenant': {
+                'pbkdf2_iterations': 260000,
+            },
+        }
+        return defaults.get(self.password_hashing_algorithm, {})
+
+    @property
+    def lockout_duration_display(self):
+        minutes = self.lockout_duration_minutes
+
+        if minutes >= 60:
+            hours = minutes // 60
+            remaining_minutes = minutes % 60
+
+            if remaining_minutes:
+                return f"{hours}h {remaining_minutes}m"
+            return f"{hours}h"
+        return f"{minutes}m"
 
     def save(self, *args, **kwargs):
         # Determine tenant type based on plan
