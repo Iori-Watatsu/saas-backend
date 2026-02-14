@@ -1,8 +1,10 @@
+from datetime import timedelta
 from uuid import uuid4
+import math
 from django.contrib.auth.models import BaseUserManager, AbstractUser
 from django.db import models
+from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
-
 
 # Create your models here.
 
@@ -42,7 +44,7 @@ class CustomUser(AbstractUser):
         verbose_name=_('ID'),
     )
     tenant = models.ForeignKey(
-        'tenan.Tenant', # Created seperately
+        'tenant.Tenant', # Created seperately
         on_delete=models.CASCADE,
         related_name='users',
         verbose_name=_('Tenant'),
@@ -51,7 +53,7 @@ class CustomUser(AbstractUser):
     email = models.EmailField(
         _('email address'),
         max_length=255,
-        unique=True,
+        unique=False,
         blank=False,
         null=False,
         help_text=_('User email address (used for login)')
@@ -145,6 +147,30 @@ class CustomUser(AbstractUser):
         null=True,
         help_text=_('Account locked until this time')
     )
+    password_history = models.JSONField(
+        _('password history'),
+        default=list,
+        blank=True,
+        help_text=_('List of previous password hashes')
+    )
+    password_changed_at = models.DateTimeField(
+        _('password changed at'),
+        null=True,
+        blank=True,
+        help_text=_('When the password was last changed')
+    )
+    password_expires_at = models.DateTimeField(
+        _('password expires at'),
+        null=True,
+        blank=True,
+        help_text=_('When the password expires')
+    )
+    force_password_change = models.BooleanField(
+        _('force password change'),
+        default=False,
+        help_text=_('User must change password on next login')
+    )
+
     USERNAME_FIELD = 'email'
     REQUIRED_FIELDS = ['first_name', 'last_name', 'tenant']
 
@@ -172,6 +198,72 @@ class CustomUser(AbstractUser):
 
     def __str__(self):
         return self.email # Unique identifier
+
+    def add_to_password_history(self, password_hash):
+        if not self.tenant:
+            return
+
+        history_size = self.tenant.password_history_size
+
+        if history_size <= 0:
+            self.password_history = []
+            return
+
+        history = list(self.password_history or [])
+
+        if password_hash in history:
+            history.remove(password_hash)
+
+        history.insert(0, password_hash)
+        self.password_history = history[:history_size]
+
+    def is_password_in_history(self, raw_password):
+        if not self.password_history or not self.tenant:
+            return False
+
+        if self.tenant.password_history_size <= 0:
+            return False
+
+        from .password_router import password_router
+        password_router.set_tenant(self.tenant)
+
+        for old_hash in self.password_history:
+            try:
+                if password_router.verify_password(raw_password, old_hash, self.tenant):
+                    return True
+
+            except (ValueError, TypeError):
+                continue
+        return False
+
+    def set_password(self, raw_password):
+        from .password_router import password_router
+
+        if self.pk and self.is_password_in_history(raw_password):
+            history_size = self.tenant.password_history_size
+            raise ValueError(
+                f"Password was used recently. Choose a different password "
+                f"(last {history_size} passwords are blocked)."
+            )
+
+        password_router.set_tenant(self.tenant)
+        new_password_hash = password_router.make_password(raw_password, self.tenant)
+
+        if self.pk and self.password:
+            self.add_to_password_history(self.password)
+
+        self.password = new_password_hash
+
+        self.password_changed_at = timezone.now()
+        self.force_password_change = False
+
+        if self.tenant.password_expiry_days > 0:
+            self.password_expires_at = (
+                self.password_changed_at +
+                timedelta(days=self.tenant.password_expiry_days)
+            )
+        else:
+            self.password_expires_at = None
 
     @property
     def full_name(self):
