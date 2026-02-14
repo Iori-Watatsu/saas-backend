@@ -9,22 +9,6 @@ import logging
 logger = logging.getLogger(__name__)
 
 # Custom tenant aware hashing backend
-def _rehash_password(user, password, db_alias=None):
-    try:
-        save_kwargs = {'update_fields': ['password', 'password_history']}
-
-        if db_alias:
-            save_kwargs['using'] = db_alias
-
-        with transaction.atomic(using=db_alias):
-            user.set_password(password)
-            user.save(**save_kwargs)
-
-            logger.info(f'Rehashed password for user {user.email}')
-    except Exception as e:
-        logger.error(f'Failed to rehash password for user {user.email}: {e}')
-
-
 class TenantAuthenticationBackend(ModelBackend):
     def authenticate(self, request, username=None, password=None, **kwargs):
         tenant = getattr(request, 'tenant', None)
@@ -100,9 +84,23 @@ class TenantAuthenticationBackend(ModelBackend):
             return None
 
         if password_router.needs_rehash(user.password, tenant):
-            _rehash_password(user, password, db_alias)
+            self._rehash_password(user, password, db_alias)
 
         return user
+
+    def _rehash_password(self, user, password, db_alias=None):
+        try:
+            save_kwargs = {'update_fields': ['password', 'password_history']}
+
+            if db_alias:
+                save_kwargs['using'] = db_alias
+            with transaction.atomic(using=db_alias):
+                user.set_password(password)
+                user.save(**save_kwargs)
+
+                logger.info(f'Rehashed password for user {user.email}')
+        except Exception as e:
+            logger.error(f'Failed to rehash password for user {user.email}: {e}')
 
     def get_user(self, user_id):
         UserModel = get_user_model()
