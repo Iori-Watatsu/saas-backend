@@ -1,10 +1,12 @@
 from django.contrib.auth import get_user_model
 from django.contrib.auth.backends import ModelBackend
 from django.db import transaction, connections
-from django_tenants.utils import tenant_context
+from django_tenants.utils import tenant_context, get_tenant_model
 from .password_router import password_router
 from psycopg2 import sql
 import logging
+from rest_framework_simplejwt.authentication import JWTAuthentication
+from rest_framework_simplejwt.exceptions import InvalidToken, AuthenticationFailed
 
 logger = logging.getLogger(__name__)
 
@@ -110,3 +112,64 @@ class TenantAuthenticationBackend(ModelBackend):
             return user
         except UserModel.DoesNotExist:
             return None
+
+class MultiTenantJWTAuthentication(JWTAuthentication):
+    def authenticate(self, request):
+        header = self.get_header(request)
+        if header is None:
+            return None
+
+        raw_token = self.get_raw_token(header)
+        if raw_token is None:
+            return None
+
+        validated_token = self.get_validated_token(raw_token)
+
+        tenant_id = validated_token.get('tenant_id')
+        if not tenant_id:
+            raise InvalidToken('Token does not contain tenant identifier')
+
+        TenantModel = get_tenant_model()
+        try:
+            tenant = TenantModel.objects.get(id=tenant_id, status='active')
+        except TenantModel.DoesNotExist:
+            raise AuthenticationFailed('Tenant not found or inactive')
+
+        request.tenant = tenant
+
+        user_id = validated_token.get('user_id')
+        if not user_id:
+            raise InvalidToken('Token does not contain user identifier')
+
+        UserModel = get_user_model()
+
+        if tenant.tenant_type == 'Standard':
+            with tenant_context(tenant):
+                try:
+                    user = UserModel.objects.get(id=user_id, tenant=tenant)
+                    return (user, validated_token)
+                except UserModel.DoesNotExist:
+                    raise AuthenticationFailed('User not found')
+
+        else:
+            try:
+                db_alias = tenant.database_name
+
+                # Prevent sql injection
+                with connections[db_alias].cursor() as cursor:
+                    cursor.execute(
+                        sql.SQL("SET search_path TO {}").format(
+                            sql.Identifier(tenant.schema_name)
+                        )
+                    )
+
+                try:
+                    user = UserModel.objects.using(db_alias).get(id=user_id, tenant=tenant)
+
+                    return (user, validated_token)
+                except UserModel.DoesNotExist:
+                    raise AuthenticationFailed('User not found in tenant database')
+
+            except Exception as e:
+                logger.error(f'JWT authentication error for tenant {tenant.subdomain}: {str(e)}')
+                raise AuthenticationFailed(f'Authentication failed: {str(e)}')
