@@ -14,6 +14,8 @@ from pathlib import Path
 from examples.tenant_tutorial.tenant_tutorial.settings import TENANT_MODEL, SHARED_APPS
 import os
 import hashlib
+from datetime import timedelta
+from django.utils import timezone
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -76,8 +78,17 @@ MIDDLEWARE = [
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
+
+    # Custom backedn middlware
     'config.middleware.APIKeyAuthenticationMiddleware',
     'config.middleware.TenantIsolationMiddleware'
+
+    # REST enpoint JWT auth
+    'rest_framework_simplejwt.authentication.JWTAuthentication',
+
+    # Session auth
+    'django.contrib.sessions.middleware.SessionMiddleware',
+    'django.contrib.auth.middleware.AuthenticationMiddleware',
 ]
 
 ROOT_URLCONF = 'config.urls'
@@ -126,7 +137,6 @@ DATABASES = get_databases()
 TENANT_MODEL = 'tenant.Tenant'
 TENANT_DOMAIN_MODEL = 'tenant.Domain'
 
-
 # Password validation
 # https://docs.djangoproject.com/en/6.0/ref/settings/#auth-password-validators
 
@@ -147,6 +157,319 @@ AUTH_PASSWORD_VALIDATORS = [
 
 AUTH_USER_MODEL = 'users.CustomUser'
 
+# !!!................................!!!....................................!!!
+# !!!...........CORE AUTHENTICATION BACKENDS (Order matters)................!!!
+# !!!................................!!!....................................!!!
+AUTHENTICATION_BACKENDS = [
+    # API key auth (for server-to-server, CI/CD)
+    # Checked first because API keys have distinct prefix (sk_)
+    'users.api_auth.APIKeyAuthenticationBackend',
+
+    # Tenant-aware JWT (for web/mobile apps)
+    'users.authentication.MultiTenantJWTAuthentication',
+
+    # Traditional tenant auth (fallback)
+    'users.authentication.TenantAuthenticationBackend',
+
+    # Social auth (Google, Facebook etc)
+    'users.social_auth.SocialAuthenticationBackend',
+
+    # Django default (fallback)
+    'django.contrib.auth.backends.ModelBackend'
+]
+# !!!................................!!!....................................!!!
+# !!!...............JWT CONFIGURATION (for web/mobile apps).................!!!
+# !!!................................!!!....................................!!!
+SIMPLE_JWT = {
+    # Token lifetimes
+    'ACCESS_TOKEN_LIFETIME': timedelta(minutes=15),
+    'REFRESH_TOKEN_LIFETIME': timedelta(days=7),
+    'ROTATE_REFRESH_TOKENS': True,
+    'BLACKLIST_AFTER_ROTATION': True,
+
+    # Custom Serializers for multi-tenancy
+    'TOKEN_OBTAIN_SERIALIZER': 'users.serializers.CustomTokenObtainPairSerializer',
+    'TOKEN_USER_CLASS': 'users.models.CustomUser',
+
+    # Signing algorithm
+    'ALGORITHM': 'HS256',
+    'SIGNING_KEY': os.environ.get('JWT_SECRET_KEY', '# Procution secret key'),
+
+    # Custom claims - Add tenant_id to JWT payload
+    'AUTH_TOKEN_CLASSES': (
+        'rest_framework_simplejwt.tokens.AccessToken',
+    ),
+
+    # Token type in header
+    'TOKEN_TYPE_CLAIM': 'token_type',
+
+    # JTI (JWT ID) for blacklisting
+    'JTI_CLAIM': 'jti',
+
+    # User identification claim
+    'USER_ID_FIELD': 'id',
+    'USER_ID_CLAIM': 'user_id',
+}
+# !!!................................!!!....................................!!!
+# !!!.....API KEY CONFIGURATION (for server-to-server, CI/CD, webhooks).....!!!
+# !!!................................!!!....................................!!!
+API_KEY_SETTINGS = {
+    # Key Format: sk_<prefix>_<secret>
+    'PREFIX': 'sk',
+    'PREFIX_LENGTH': 8,
+    'SECRET_LENGTH': 32,
+
+    # Default expirations
+    'DEFAULT_EXPIRY_DAYS': 365,
+
+    # Hash algorithm (for storing secrets)
+    'HASH_ALGORITHM': 'sha512',
+
+    # Rate limiting
+    'RATE_LIMIT_ENABLED': True,
+    'RATE_LIMIT_REQUESTS': 1000,        # Per hour
+    'RATE_LIMIT_WINDOW_SECONDS': 3600,
+
+    # Logging & Audit
+    'LOG_API_KEY_USAGE': True,
+    'AUDIT_TRAIL_ENABLED': True,
+
+    'SHOW_DEPRECATION_WARNINGS': True,
+    'DEPRECATION_WARNING_HEADER': 'X-API-Deprecation-Warning',
+    'SUNSET_WARNING_DAYS': 30,  # Warn when expiring in 30 days
+}
+# API Version Configuration (from our earlier implementation)
+API_VERSION_SCOPES = {
+    'v1': {
+        'users': ['read', 'write'],
+        'projects': ['read'],
+        'settings': ['read'],
+    },
+    'v2': {
+        'users': ['read', 'write', 'delete'],
+        'projects': ['read', 'write', 'delete'],
+        'settings': ['read', 'write'],
+        'webhooks': ['read', 'write'],
+        'analytics': ['read'],
+    },
+    'v3': {
+        'users': ['read', 'write', 'delete'],
+        'projects': ['read', 'write', 'delete'],
+        'settings': ['read', 'write'],
+        'webhooks': ['read', 'write', 'manage'],
+        'analytics': ['read', 'write'],
+        'audit_logs': ['read'],
+    },
+}
+DEPRECATED_API_VERSIONS = {
+    'v1': {
+        'sunset_date': (timezone.now() + timedelta(days=100)).isoformat(),
+        'migrate_to': 'v2',
+        'breaking_changes': [
+            'projects:write removed (use v2)',
+            'analytics endpoints moved (use v2)',
+        ]
+    },
+}
+# !!!................................!!!....................................!!!
+# !!!................JWT + API KEY INTEGRATION SETTINGS.....................!!!
+# !!!................................!!!....................................!!!
+AUTHENTICATION = {
+    # JWT config
+    'JWT': {
+        'enabled': True,
+        'require_2fa': True,           # Enforce 2FA before issuing JWT
+        'include_tenant_id': True,      # Add tenant_id to token claims
+        'refresh_endpoint': '/api/token/refresh/',
+        'obtain_endpoint': '/api/token/',
+    },
+
+    # API key config
+    'API_KEY': {
+        'enabled': True,
+        'require_2fa': False,           # API keys don't use 2FA
+        'rate_limit': True,
+        'version_support': True,        # Multi-version per key
+        'scope_validation': True,       # Check scopes per version
+    },
+
+    # Social auth config
+    'SOCIAL_AUTH': {
+        'google': {
+            'enabled': bool(os.environ.get('GOOGLE_OAUTH2_KEY')),
+            'key': os.environ.get('GOOGLE_OAUTH2_KEY'),
+            'secret': os.environ.get('GOOGLE_OAUTH2_SECRET'),
+        },
+        'facebook': {
+            'enabled': bool(os.environ.get('FACEBOOK_OAUTH2_KEY')),
+            'key': os.environ.get('FACEBOOK_OAUTH2_KEY'),
+            'secret': os.environ.get('FACEBOOK_OAUTH2_SECRET'),
+        },
+        'microsoft': {
+            'enabled': bool(os.environ.get('MICROSOFT_OAUTH2_KEY')),
+            'key': os.environ.get('MICROSOFT_OAUTH2_KEY'),
+            'secret': os.environ.get('MICROSOFT_OAUTH2_SECRET'),
+        },
+    },
+
+    # 2FA config
+    '2FA': {
+        'enabled': True,
+        'issuer_name': os.environ.get('2FA_ISSUER', '# SaaS Platform'),
+        'topt_digits': 6,
+        'topt_interval': 30, # seconds
+        'backup_codes_count': 10,
+        'require_for_jwt': True, # Enforce 2FA for jwt users
+        'require_for_api_key': False, # Skip 2FA for API key users
+        'grace_period_minutes': 0, # No grace period
+    },
+}
+# !!!................................!!!....................................!!!
+# !!!....................REST FRAMEWORK CONFIGURATION.......................!!!
+# !!!................................!!!....................................!!!
+REST_FRAMEWORK = {
+    'DEFAULT_AUTHENTICATION_CLASSES': [
+        # Order matters
+        'rest_framework_simplejwt.authentication.JWTAuthentication',
+        'users.api_auth.APIKeyAuthenticationBackend',
+        'rest_framework.authentication.SessionAuthentication',
+    ],
+
+    'DEFAULT_PERMISSION_CLASSES': [
+        'rest_framework.permissions.IsAuthenticated',
+    ],
+
+    # Throttling (rate limiting)
+    'DEFAULT_THROTTLE_CLASSES': [
+        'rest_framework.throttling.AnonRateThrottle',
+        'rest_framework.throttling.UserRateThrottle',
+    ],
+    'DEFAULT_THROTTLE_RATES': {
+        'anon': '100/hour',
+        'user': '1000/hour',
+    },
+
+    # Pagination
+    'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
+    'PAGE_SIZE': 50,
+}
+# !!!................................!!!....................................!!!
+# !!!.......................SOCIAL AUTHENTICATION...........................!!!
+# !!!................................!!!....................................!!!
+SOCIAL_AUTH_GOOGLE_OAUTH2_KEY = os.environ.get('GOOGLE_OAUTH2_KEY')
+SOCIAL_AUTH_GOOGLE_OAUTH2_SECRET = os.environ.get('GOOGLE_OAUTH2_SECRET')
+SOCIAL_AUTH_GOOGLE_OAUTH2_SCOPE = [
+    'https://www.googleapis.com/auth/userinfo.email',
+    'https://www.googleapis.com/auth/userinfo.profile',
+]
+
+SOCIAL_AUTH_FACEBOOK_KEY = os.environ.get('FACEBOOK_KEY')
+SOCIAL_AUTH_FACEBOOK_SECRET = os.environ.get('FACEBOOK_SECRET')
+SOCIAL_AUTH_FACEBOOK_SCOPE = ['email', 'public_profile']
+
+SOCIAL_AUTH_MICROSOFT_KEY = os.environ.get('MICROSOFT_KEY')
+SOCIAL_AUTH_MICROSOFT_SECRET = os.environ.get('MICROSOFT_SECRET')
+SOCIAL_AUTH_MICROSOFT_SCOPE = ['User.Read']
+
+# JWT social auth
+SOCIAL_AUTH_NEW_USER_REDIRECT_URL = '/api/social/token/'
+SOCIAL_AUTH_USER_REDIRECT_URL = '/api/social/token/'
+# !!!................................!!!....................................!!!
+# !!!......................TWO-FACTOR AUTHENTICATION........................!!!
+# !!!................................!!!....................................!!!
+TWO_FACTOR_ENABLED = True
+TWO_FACTOR_ISSUER_NAME = os.environ.get('2FA_ISSUER', 'Saas PLatform')
+TWO_FACTOR_TOTP_DIGITS = 6
+TWO_FACTOR_TOTP_INTERVAL = 30 # seconds between code refresh
+
+# Cache for OTP verification attemps preventing brute force attacks
+TWO_FACTOR_CACHE_KEY_PREFIX = '2fa_attempt'
+TWO_FACTOR_MAX_ATTEMPTS = 5
+TWO_FACTOR_ATTEMPT_WINDOW_MINUTES = 15
+
+# !!!................................!!!....................................!!!
+# !!!.......................LOGGING CONFIGURATION...........................!!!
+# !!!................................!!!....................................!!!
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'formatters': {
+        'verbose': {
+            'format': '[{levelname}] {asctime} {name} {message}',
+            'style': '{',
+        },
+        'json': {
+            '()': 'pythonjsonlogger.jsonlogger.JsonFormatter',
+            'format': '%(asctime)s %(name)s %(levelname)s %(message)s'
+        }
+    },
+    'handlers': {
+        'console': {
+            'class': 'logging.StreamHandler',
+            'formatter': 'verbose',
+        },
+        'file': {
+            'class': 'logging.handlers.RotatingFileHandler',
+            'filename': 'logs/auth.log',
+            'maxBytes': 10485760,  # 10MB
+            'backupCount': 5,
+            'formatter': 'json',
+        },
+        'api_key_file': {
+            'class': 'logging.handlers.RotatingFileHandler',
+            'filename': 'logs/api_keys.log',
+            'maxBytes': 10485760,
+            'backupCount': 5,
+            'formatter': 'json',
+        },
+    },
+    'loggers': {
+        'users.api_auth': {
+            'handlers': ['console', 'api_key_file'],
+            'level': 'INFO',
+        },
+        'users.authentication': {
+            'handlers': ['console', 'file'],
+            'level': 'INFO',
+        },
+        'users.social_auth': {
+            'handlers': ['console', 'file'],
+            'level': 'INFO',
+        },
+    },
+}
+
+# !!!................................!!!....................................!!!
+# !!!.......................SESSION CONFIGURATION...........................!!!
+# !!!................................!!!....................................!!!
+SESSION_ENGINE = 'django.contrib.sessions.backends.cache'
+SESSION_COOKIE_AGE = 1209600 # 2 weeks
+SESSION_COOKIE_SECURE = True # Only send over HTTPS
+SESSION_COOKIE_HTTPONLY = True # Not accesible via Javascript
+SESSION_COOKIE_SAMESITE = 'Lax'
+SESSION_CACHE_ALIAS = 'default'
+
+# !!!................................!!!....................................!!!
+# !!!...................CORS CONFIGURATION (for API access).................!!!
+# !!!................................!!!....................................!!!
+CORS_ALLOWED_ORIGINS = [
+    "http://localhost:3000",
+    "http://localhost:8000",
+    "https://saasdomain.com",
+    "https://www.saadomain.com",
+]
+
+CORS_ALLOWED_CREDENTIALS = True
+
+# !!!................................!!!....................................!!!
+# !!!.........................SECURITY SETTINGS.............................!!!
+# !!!................................!!!....................................!!!
+SECURE_SSL_REDIRECT = os.environ.get('SECURE_SSL_REDIRECT', 'True')
+SECURE_HSTS_SECONDS = 31536000 # 1 year
+SECURE_HSTS_INCLUDE_SUBDOMAINS = True
+SECURE_HSTS_PRELOAD = True
+
+# API key hashing
 PASSWORD_HASHERS = [
     'users.hashers.Argon2TenantHasher',
     'users.hashers.BcryptTenantHasher',
@@ -196,6 +519,26 @@ PASSWORD_EXPIRY_DAYS = 90
 # Account sec defaults
 MAX_LOGIN_ATTEMPTS = 5
 LOCKOUT_DURATION_MINUTES = 30
+
+# !!!................................!!!....................................!!!
+# !!!.....CACHE CONFIGURATION(for rate limiting, token blacklist, etc.).....!!!
+# !!!................................!!!....................................!!!
+CACHES = {
+    'default': {
+        'BACKEND': 'django_redis.cache.RedisCache',
+        'LOCATION': os.environ.get('REDIS_URL', 'redis://127.0.0.1:6379/1'),
+        'OPTIONs': {
+            'CLIENT_CLASS': 'django_redis.client.DefaultClient',
+            'SOCKET_CONNECT_TIMEOUT': 5,
+            'SOCKET_TIMEOUT': 5,
+            'COMPRESSOR': 'django_redis.compressors.zlib.ZlibCompressor',
+        },
+        'KEY_PREFIX': 'saas',
+    }
+}
+
+# Token blacklist (for revoking JWTs)
+SIMPLE_JWT_BLACKLIST_APP = True
 
 # Internationalization
 # https://docs.djangoproject.com/en/6.0/topics/i18n/

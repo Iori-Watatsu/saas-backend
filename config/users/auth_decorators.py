@@ -1,9 +1,9 @@
 from functools import wraps
 from django.http import JsonResponse
-from rest_framework.decorators import api_view
-from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.permissions import BasePermission
+from rest_framework.response import Response
+
 
 # Only allow JWT auth
 class IsJWTAuthenticated(BasePermission):
@@ -128,7 +128,7 @@ def allow_both_auth(view_func):
     @wraps(view_func)
     def wrapped_view(request, *args, **kwargs):
         if not request.user or not request.user.is_authenticated:
-            return JsonResponse({'error': 'Authentication required'}, status=401
+            return JsonResponse({'error': 'Authentication required'}, status=401)
 
         # Valid for both JWT and API key
         return view_func(request, *args, **kwargs)
