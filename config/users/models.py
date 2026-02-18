@@ -1,6 +1,5 @@
 from datetime import timedelta
 from uuid import uuid4
-import math
 from django.contrib.auth.models import BaseUserManager, AbstractUser
 from django.db import models
 from django.utils import timezone
@@ -364,3 +363,14 @@ class CustomUser(AbstractUser):
         }
 
         return permissions.get(self.role, {})
+
+class TwoFactorAuth(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid4, editable=False)
+    user = models.OneToOneField(CustomUser, on_delete=models.CASCADE, related_name='two_factor_auth')
+    secret = models.CharField(max_length=32)
+    backup_codes = models.JSONField(default=list)
+    is_active = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    class Meta:
+        db_table = 'two_factor_auth'
