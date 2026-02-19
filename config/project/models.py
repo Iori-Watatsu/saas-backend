@@ -209,3 +209,24 @@ class Project(models.Model):
             self.slug = slug
 
         super().save(*args, **kwargs)
+
+    def get_current_team_member_count(self):
+        return self.members.count()
+
+    def can_add_team_member(self):
+        return self.get_current_team_member_count() < self.max_team_members
+
+    def get_usage_percentage(self, resource_type):
+        usage = self.projectusage_set.first()
+
+        if not usage:
+            return 0
+
+        if resource_type == 'storage':
+            return min(100, int((usage.storage_used_gb / self.max_storage_gb) * 100))
+        elif resource_type == 'api_calls':
+            return min(100, int((usage.api_calls_used / self.max_api_calls_monthly) * 100))
+        elif resource_type == 'team':
+            return min(100, int((usage.team_members_count / self.max_team_members) * 100))
+
+        return 0 
