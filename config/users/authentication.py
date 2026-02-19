@@ -1,12 +1,14 @@
+import logging
 from django.contrib.auth import get_user_model
 from django.contrib.auth.backends import ModelBackend
 from django.db import transaction, connections
 from django_tenants.utils import tenant_context, get_tenant_model
-from .password_router import password_router
 from psycopg2 import sql
-import logging
 from rest_framework_simplejwt.authentication import JWTAuthentication
 from rest_framework_simplejwt.exceptions import InvalidToken, AuthenticationFailed
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.exceptions import PermissionDenied
+from .password_router import password_router
 
 logger = logging.getLogger(__name__)
 
@@ -173,3 +175,4 @@ class MultiTenantJWTAuthentication(JWTAuthentication):
             except Exception as e:
                 logger.error(f'JWT authentication error for tenant {tenant.subdomain}: {str(e)}')
                 raise AuthenticationFailed(f'Authentication failed: {str(e)}')
+

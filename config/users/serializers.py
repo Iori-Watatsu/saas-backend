@@ -1,6 +1,3 @@
-from readline import backend
-from typing import Any
-
 from rest_framework import serializers
 from rest_framework.exceptions import ValidationError
 from rest_framework_simplejwt.tokens import RefreshToken, AccessToken
@@ -451,7 +448,7 @@ class APIKeyCreateSerializer(serializers.Serializer):
             tenant=tenant,
             user=user,
             name=validated_data.get('name'),
-            scpoes=validated_data.get('scopes'),
+            scopes=validated_data.get('scopes'),
             api_versions=validated_data.get('api_versions'),
             expires_in_days=validated_data.get('expires_in_days'),
             can_read=validated_data.get('can_read', True),
@@ -611,7 +608,7 @@ class UserProfileUpdateSerializer(serializers.ModelSerializer):
         return instance
 
 # Serializer for token response, used in login endpoints
-class TokenResponseSerializers(serializers.Serializer):
+class TokenResponseSerializer(serializers.Serializer):
     access = serializers.CharField()
     refresh = serializers.CharField()
     user = CustomUserDetailSerializer()

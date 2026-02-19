@@ -1,19 +1,12 @@
-from django.shortcuts import render
-from drf_yasg.inspectors.field import serializer_field_to_basic_type
 from rest_framework import status, viewsets
-from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework.permissions import AllowAny, IsAuthenticated
-from rest_framework.generics import (
-    CreateAPIView, ListAPIView, DestroyAPIView, UpdateAPIView
-)
-from django.contrib.auth import authenticate, login, logout
+from rest_framework.generics import CreateAPIView, UpdateAPIView
 from django.utils import timezone
 from rest_framework_simplejwt.tokens import RefreshToken
 import logging
 from users.serializers import (
-    CustomTokenObtainPairSerializer,
     TenantLoginSerializer,
     SocialLoginSerializer,
     TokenRefreshSerializer,
@@ -29,17 +22,11 @@ from users.serializers import (
     APIKeyListSerializer,
     APIKeyCreateSerializer,
     APIKeyDetailSerializer,
-    APIKeyRevokeSerializer,
-    TokenResponseSerializers,
 )
-from users.models import CustomUser, TwoFactorAuth
+from users.models import CustomUser,TwoFactorAuth
 from users.api_auth import APIKey, APIKeyAuthenticationBackend
-from users.auth_decorators import (
-    JWTRequiredMixin,
-    APIKeyRequiredMixin,
-    BothAuthMethodsMixin
-)
 from tenant.models import Tenant
+from users.auth_decorators import JWTRequiredMixin, APIKeyRequiredMixin, BothAuthMethodsMixin
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +34,8 @@ logger = logging.getLogger(__name__)
 
 # POST endpoint for traditional username/password login with tenant context
 class TenantLoginView(APIView):
+    permission_classes = [AllowAny]
+    serializer_class = TenantLoginSerializer
     def post(self, request):
         serializer = self.serializer_class(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -73,7 +62,7 @@ class TenantLoginView(APIView):
         refresh['tenant_id'] = str(tenant.id)
         refresh['tenant_subdomain'] = tenant.subdomain
         refresh['email'] = user.email
-        refresh['full_name'] = user.fullname
+        refresh['full_name'] = user.full_name
         refresh['role'] = user.role
 
         # Update last login
@@ -92,6 +81,8 @@ class TenantLoginView(APIView):
 
 # POST endpoint for OAuth2 login (Google, Facebook, Microsoft, etc.)
 class SocialLoginView(APIView):
+    permission_classes = [AllowAny]
+    serializer_class = SocialLoginSerializer
     def post(self, request):
         serializer = self.serializer_class(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -126,9 +117,10 @@ class SocialLoginView(APIView):
         user.last_login = timezone.now()
         user.save(update_fields=['last_login'])
 
+        provider = serializer.validated_data.get('provider', 'unknown')
         logger.info(
-                f'User {user.email} logged in via {serializer.validated_data.get('provider)} '
-                                                                                 f'(tenant: {tenant.subdomain})'
+                f'User {user.email} logged in via {provider} '
+                f'(tenant: {tenant.subdomain})'
         )
 
         response_data = {
@@ -185,8 +177,10 @@ class RegisterView(CreateAPIView):
     def create(self, request, *args, **kwargs):
         response = super().create(request, *args, **kwargs)
 
-        user = self.get_serializer().validate_data.get('user')
-        if user:
+        # Get user from validated data properly
+        serializer = self.get_serializer(data=request.data)
+        if serializer.is_valid:
+            user = serializer.validated_data.get('user')
             logger.info(f'New user registration: {user.email}')
 
         return response
@@ -249,22 +243,22 @@ class TwoFactorSetupView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        seriliazer = TwoFactorSetupSerializer(
+        serializer = TwoFactorSetupSerializer(
             data={},
             context={'user': request.user}
         )
 
-        return Response(seriliazer.data, status=status.HTTP_200_OK)
+        return Response(serializer.data, status=status.HTTP_200_OK)
 
 # POST endpoint to confirm 2FA setup. Verifies TOTP code enables 2FA
 class TwoFactorConfirmView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
-        serialzer = TwoFactorConfirmSerializer(data=request.data)
-        serialzer.is_valid(raise_exception=True)
+        serializer = TwoFactorConfirmSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
 
-        secret = serialzer.validated_data['secret']
+        secret = serializer.validated_data['secret']
         user = request.user
 
         # Create or update 2FA record
@@ -272,7 +266,7 @@ class TwoFactorConfirmView(APIView):
             user=user,
             defaults={
                 'secret': secret,
-                'is_valid': True,
+                'is_active': True,
             }
         )
 
@@ -287,7 +281,7 @@ class TwoFactorConfirmView(APIView):
         return Response({
             'success': True,
             'backup_codes': backup_codes,
-            'messages': 'Save these backup codes in a safe place. You can use them to access your account if you lose your authenticator device,',
+            'message': 'Save these backup codes in a safe place. You can use them to access your account if you lose your authenticator device,',
         }, status=status.HTTP_201_CREATED)
 
 # POST endpoint to verify 2FA code during login. Returns JWT token after successful verification
@@ -315,7 +309,7 @@ class TwoFactorVerifyView(APIView):
         user.last_login = timezone.now()
         user.save(update_fields=['last_login'])
 
-        logger.info(f'User {user.email} passed 2FA verifaction')
+        logger.info(f'User {user.email} passed 2FA verification')
 
         response_data = {
             'access': str(refresh.access_token),
@@ -371,69 +365,68 @@ class UserProfileUpdateView(UpdateAPIView):
 
 # GET: List all API keys for current user
 # POST: Create new API key
-class APIKeyListCreateView(APIKey):
-    permission_classes = [IsAuthenticated]
+if APIKey is not None:
+    class APIKeyListCreateView(APIView):
+        permission_classes = [IsAuthenticated]
 
-    # List API keys. Ensure not using API key to list keys
-    def get(self, request):
-        if hasattr(request, 'api_key') and request.api_key:
-            return Response(
-                {'error': 'Cannot list API keys using API key auth'},
-                status=status.HTTP_403_FORBIDDEN
+        # List API keys. Ensure not using API key to list keys
+        def get(self, request):
+            if hasattr(request, 'api_key') and request.api_key:
+                return Response(
+                    {'error': 'Cannot list API keys using API key auth'},
+                    status=status.HTTP_403_FORBIDDEN
+                )
+
+            api_keys = APIKey.objects.filter(
+                user=request.user,
+                tenant=request.tenant
+            ).order_by('-created_at')
+
+            serializer = APIKeyListSerializer(api_keys, many=True)
+            return Response(serializer.data, status=status.HTTP_200_OK)
+
+        # Create new API key. Ensure not using key to create keys
+        def post(self, request):
+            if hasattr(request, 'api_key') and request.api_key:
+                return Response(
+                    {'error': 'Cannot create API key using API key auth'},
+                    status=status.HTTP_403_FORBIDDEN
+                )
+
+            serializer = APIKeyCreateSerializer(
+                data=request.data,
+                context={'user': request.user, 'tenant': request.tenant}
+            )
+            serializer.is_valid(raise_exception=True)
+
+            api_key_data = serializer.save()
+
+            logger.info(
+                f"API key created: {api_key_data['name']} "
+                f"(user: {request.user.email}, tenant: {request.tenant.subdomain})"
             )
 
-        api_keys = APIKey.objects.filter(
-            user=request.user,
-            tenant=request.tenant
-        ).order_by('-created_at')
+            return Response(api_key_data, status=status.HTTP_201_CREATED)
 
-        serializer = APIKeyListSerializer(api_keys, many=True)
-        return Response(serializer.data, status=status.HTTP_200_OK)
+    # GET: Retrieve API key details
+    # DELETE: Revoke API key
+    class APIKeyDetailView(APIView):
+        permission_classes = [IsAuthenticated]
 
-    # Create new API key. Ensure not using key to create keys
-    def post(self, request):
-        if hasattr(request, 'api_key') and request.api_key:
-            return Response(
-                {'error': 'Cannot create API key using API key auth'},
-                status=status.HTTP_403_FORBIDDEN
-            )
-
-        serializer = APIKeyCreateSerializer(
-            data=request.data,
-            context={'user': request.user, 'tenant': request.tenant}
-        )
-        serializer.is_valid(raise_exception=True)
-
-        api_key_data = serializer.save()
-
-        logger.info(
-            f"API key create: {api_key_data['name']} "
-            f"(user: {request.user.email}, tenant: {request.tenant.subdomain})"
-        )
-
-        return Response(api_key_data, status=status.HTTP_201_CREATED)
-
-# GET: Retrieve API key details
-# DELETE: Revoke API key
-class APIKeyDetailView(APIView):
-    permission_classes = [IsAuthenticated]
-
-    def get_object(self):
-        api_key_id = self.kwargs.get('api_key_id')
-
-        try:
-            api_key = APIKey.objects.get(
-                id=api_key_id,
-                user=self.request.user,
-                tenant=self.request.tenant
-            )
-            return api_key
-        except APIKey.DoesNotExist:
-            return None
+        def get_object(self, api_key_id):
+            try:
+                api_key = APIKey.objects.get(
+                    id=api_key_id,
+                    user=self.request.user,
+                    tenant=self.request.tenant
+                )
+                return api_key
+            except APIKey.DoesNotExist:
+                return None
 
         # Get API key details
-        def get(self, request, api_key_id):
-            api_key = self.get_object()
+        def get (self, request, api_key_id):
+            api_key = self.get_object(api_key_id)
 
             if not api_key:
                 return Response(
@@ -446,11 +439,11 @@ class APIKeyDetailView(APIView):
 
         # Revoke delete API key
         def delete(self, request, api_key_id):
-            api_key = self.get_objects()
+            api_key = self.get_object(api_key_id)
 
             if not api_key:
                 return Response(
-                    {'error': 'API key not'},
+                    {'error': 'API key not found'},
                     status=status.HTTP_404_NOT_FOUND
                 )
 
@@ -483,13 +476,13 @@ class APIKeyViewSet(viewsets.ViewSet):
 
     # Create API key
     def create(self, request):
-        serilizer = APIKeyCreateSerializer(
+        serializer = APIKeyCreateSerializer(
             data=request.data,
             context={'user': request.user, 'tenant': request.tenant}
         )
-        serilizer.is_valid(raise_exception=True)
+        serializer.is_valid(raise_exception=True)
 
-        api_key_data = serilizer.save()
+        api_key_data = serializer.save()
         return Response(api_key_data, status=status.HTTP_201_CREATED)
 
     # Retrieve API key details

@@ -267,6 +267,81 @@ class CustomUser(AbstractUser):
         else:
             self.password_expires_at = None
 
+    # Check password expiration
+    def is_password_expired(self):
+        if not self.password_changed_at:
+            return False
+
+        return timezone.now() > self.password_expires_at
+
+    # Calculate password strength
+    def get_password_strength_score(self, password=None):
+        if password is None:
+            password = self.password
+
+        score = 0
+
+        # Length score
+        length = len(password)
+        if length >= 8:
+            score += 10
+        if length >= 12:
+            score += 10
+        if length >= 16:
+            score += 10
+        if length >= 20:
+            score += 10
+
+        # Character variety score
+        if any(c.isupper() for c in password):
+            score += 10
+        if any(c.islower() for c in password):
+            score += 10
+        if any(c.isdigit() for c in password):
+            score += 10
+        if any(c in '!@#$%^&*()_+-=[]{}|;:,.<>?`~' for c in password):
+            score += 10
+
+        # Entripy score
+        charset_size = 0
+        if any(c.islower() for c in password):
+            charset_size += 26
+        if any(c.isupper() for c in password):
+            charset_size += 26
+        if any(c.isdigit() for c in password):
+            charset_size += 10
+        if any(c in '!@#$%^&*()_+-=[]{}|;:,.<>?`~' for c in password):
+            charset_size += 32
+
+        import math
+        if charset_size > 0:
+            entropy = length * math.log2(charset_size)
+            if entropy >= 64:  # Very strong
+                score += 20
+            elif entropy >= 48:  # Strong
+                score += 15
+            elif entropy >= 32:  # Moderate
+                score += 10
+            elif entropy >= 28:  # Weak
+                score += 5
+
+        return min(100, score)
+
+    # Human readable password strength
+    def get_password_strength_label(self, password=None):
+        score = self.get_password_strength_score(password)
+
+        if score >= 80:
+            return 'Very Strong'
+        elif score >= 60:
+            return 'Strong'
+        elif score >= 40:
+            return 'Moderate'
+        elif score >= 20:
+            return 'Weak'
+        else:
+            return 'Very Weak'
+
     @property
     def full_name(self):
         return f"{self.first_name} {self.last_name}".strip() # Return suser full name
