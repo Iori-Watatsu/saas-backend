@@ -69,6 +69,7 @@ INSTALLED_APPS = list(SHARED_APPS) + [
 ]
 
 MIDDLEWARE = [
+    'django.middleware.gzip.GZipMiddleware',
     'django_tenants.middleware.main.TenantMainMiddleware',
     'config.middleware.TenantDatabaseMiddleware',
     'django.middleware.security.SecurityMiddleware',
