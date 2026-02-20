@@ -17,7 +17,7 @@ class Project(models.Model):
         unique=True,
         primary_key=True,
         editable=False,
-        verbose_name=('ID')
+        verbose_name=_('ID')
     )
 
     tenant = models.ForeignKey(
@@ -43,6 +43,13 @@ class Project(models.Model):
         related_name='created_projects',
         verbose_name=_('Created By'),
         help_text=_('User who created this projects (for audit trail)')
+    )
+
+    members = models.ManyToManyField(
+        'users.CustomUser',
+        through='ProjectMember',
+        blank=True,
+        help_text=_('Team members with access to this project')
     )
 
     name = models.CharField(
@@ -230,3 +237,231 @@ class Project(models.Model):
             return min(100, int((usage.team_members_count / self.max_team_members) * 100))
 
         return 0 
+
+class ProjectMember(models.Model):
+    id = models.UUIDField(
+        default=uuid4,
+        unique=True,
+        primary_key=True,
+        editable=False,
+        verbose_name=_('ID')
+    )
+
+    project = models.ForeignKey(
+        Project,
+        on_delete=models.CASCADE,
+        related_name='members_relation',
+        verbose_name=_('Project'),
+        help_text=_('The project this member belongs to')
+    )
+
+    user = models.ForeignKey(
+        'users.CustomUser',
+        on_delete=models.CASCADE,
+        related_name='project_memberships',
+        verbose_name=_('User'),
+        help_text=_('The user who is member of the project')
+    )
+
+    ROLE_CHOICES = [
+        ('owner', _('Owner')),
+        ('admin', _('Admin')),
+        ('editor', _('Editor')),
+        ('viewer', _('Viewer')),
+    ]
+    role = models.CharField(
+        max_length=20,
+        choices=ROLE_CHOICES,
+        default='viewer',
+        verbose_name=_('Role'),
+        help_text=_('User role within the project')
+    )
+
+    invited_at = models.DateTimeField(
+        auto_now_add=True,
+        verbose_name=_('Invited At')
+    )
+
+    joined_at = models.DateTimeField(
+        blank=True,
+        null=True,
+        verbose_name=_('Joined At'),
+        help_text=_('When the user accepted the invitation')
+    )
+
+    class Meta:
+        db_table = 'projects_members'
+        verbose_name = _('Project Member')
+        verbose_name_plural = _('Project Members')
+
+        constraints = [
+            models.UniqueConstraint(
+                fields=['projects', 'user'],
+                name='unique_project_user_membership'
+            )
+        ]
+
+        indexes = [
+            models.Index(fields=['project', 'role']),
+            models.Index(fields=['user', 'role'])
+        ]
+
+    def __str__(self):
+        return f'{self.user.email} - {self.project.name} ({self.role})'
+
+class ProjectUsage(models.Model):
+    id = models.UUIDField(
+        default=uuid4,
+        unique=True,
+        primary_key=True,
+        editable=False,
+        verbose_name=_('ID')
+    )
+
+    api_calls_used = models.IntegerField(
+        default=0,
+        verbose_name=_('API Calls Used'),
+        help_text=_('Number of API called used this period')
+    )
+
+    storage_used_gb = models.IntegerField(
+        default=0,
+        verbose_name=_('Storage Used (GB)'),
+        help_text=_('Storage used in gigabytes')
+    )
+
+    team_members_count = models.IntegerField(
+        default=0,
+        verbose_name=_('Team Members Count'),
+        help_text=_('Current number of active team members')
+    )
+
+    reset_date = models.DateField(
+        verbose_name=_('Reset Date'),
+        help_text=_('When the usage metrics reset (e.g., monthly)')
+    )
+
+    updated_at = models.DateTimeField(
+        auto_now=True,
+        verbose_name=_('Updated At')
+    )
+
+    class Meta:
+        db_table = 'project_usage'
+        verbose_name = _('Project Usage')
+        verbose_name_plural = _('Project Usage')
+
+        constraints =[
+            models.UniqueConstraint(
+                fields=['projects', 'reset_date'],
+                name='unique_usage_per_reset_period'
+            )
+        ]
+
+        indexes = [
+            models.Index(fields=['project', 'reset_date'])
+        ]
+
+        def __str__(self):
+            return f'{self.project.name} - Usage for {self.reset_date}'
+
+class ProjectAuditLog(models.Model):
+    id = models.UUIDField(
+        default=uuid4,
+        unique=True,
+        primary_key=True,
+        editable=False,
+        verbose_name=_('ID')
+    )
+
+    tenant = models.ForeignKey(
+        'tenant.Tenant',
+        on_delete=models.CASCADE,
+        related_name='project_audit_logs',
+        verbose_name=_('Tenant'),
+        help_text=_('The tenant this log belongs to')
+    )
+
+    project = models.ForeignKey(
+        Project,
+        on_delete=models.CASCADE,
+        related_name='audit_logs',
+        verbose_name=_('Project'),
+        help_text=_('The project that was accessed/modified')
+    )
+
+    user = models.ForeignKey(
+        'users.CustomUser',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='project_audit_logs',
+        verbose_name=_('User'),
+        help_text=_('User who performed the action')
+    )
+
+    ACTION_CHOICES = [
+        ('created', _('Created')),
+        ('updated', _('Updated')),
+        ('deleted', _('Deleted')),
+        ('archived', _('Archived')),
+        ('restored', _('Restored')),
+        ('member_added', _('Member Added')),
+        ('member_removed', _('Member Removed')),
+        ('member_role_changed', _('Member Role Changed')),
+        ('settings_updated', _('Settings Updated')),
+        ('data_exported', _('Data Exported')),
+        ('accessed', _('Accessed')),
+    ]
+    action = models.CharField(
+        max_length=50,
+        choices=ACTION_CHOICES,
+        verbose_name=_('Action'),
+        help_text=_('What action was performed')
+    )
+
+    details = models.JSONField(
+        blank=True,
+        null=True,
+        default=dict,
+        verbose_name=_('Details'),
+        help_text=_('Addtional context (e.g., what fields changed)')
+    )
+
+    ip_address = models.GenericIPAddressField(
+        blank=True,
+        null=True,
+        verbose_name=_('IP Address'),
+        help_text=_('IP address of the request')
+    )
+
+    user_agent = models.TextField(
+        blank=True,
+        default='',
+        verbose_name=_('User Agent'),
+        help_text=_('Browser/client information')
+    )
+
+    timestamp = models.DateTimeField(
+        auto_now_add=True,
+        verbose_name=_('Timestamp'),
+        help_text=_('When the action occurred')
+    )
+
+    class Meta:
+        db_table = 'project_audit_logs'
+        verbose_name = _('Project Audit Log')
+        verbose_name_plural = _('Project Audit Logs')
+
+        indexes = [
+            models.Index(fields=['tenant', 'project', '-timestamp']),
+            models.Index(fields=['tenant', 'user', '-timestamp']),
+            models.Index(fields=['tenant', 'action', '-timestamp']),
+            models.Index(fields=['-timestamp'])
+        ]
+
+        # Keeps logs ordered by most recent first
+        ordering = ['-timestamp']
+
+    def __str__(self):
+        return f"{self.action} - {self.project.name} by {self.user.email if self.user else 'System'}"
