@@ -349,7 +349,7 @@ class ProjectAdminWithUsageFilter(admin.ModelAdmin):
             return '-'
 
         # Calculate percentages
-        api_pct = (usage.api_calls_used / obj.max_api_calls_monthly * 100) if obj.max_api_calls_monthly > 0 else 0lambda
+        api_pct = (usage.api_calls_used / obj.max_api_calls_monthly * 100) if obj.max_api_calls_monthly > 0 else 0
         storage_pct = (usage.storage_used_gb / obj.max_storage_gb * 100) if obj.max_storage_gb > 0 else 0
         team_pct = (usage.team_members_count / obj.max_team_members * 100) if obj.max_team_members > 0 else 0
 
@@ -402,3 +402,562 @@ def calculate_project_usage_percentage(project, usage=None):
         'has_data': True,
         'usage_level': 'High' if max_pct > 80 else 'Medium' if max_pct >= 50 else 'Low'
     }
+
+# Filter projects by meber count
+class MemberCountFilter(admin.SimpleListFilter):
+    title = _('Member.Count')
+    parameter_name = 'member_count'
+
+    def lookups(self, request, model_admin):
+        return (
+            ('solo', _('Solo (1 member)')),
+            ('samll', _('Small (2-5)')),
+            ('medium', _('Medium (6-20)')),
+            ('large', _('Large (20+)'))
+        )
+
+    def queryset(self, request, queryset):
+        queryset = queryset.annot(member_count=Count('members'))
+        if self.value() == 'solo':
+            return queryset.filter(member_count=1)
+        elif self.value() == 'samell':
+            return queryset.filter(member_count__range=[2, 5])
+        elif self.value() == 'medium':
+            return queryset.filter(member_count__range=[6, 20])
+        elif self.value() == 'large':
+            return queryset.filter(member_count__gt=20)
+
+# Inline admin for project member
+class ProjectMemberInLine(admin.TabularInline):
+    model = ProjectMember
+    extra = 1
+    fields = ['user', 'role', 'invited_at', 'joined_at']
+    readonly_fields = ['invited_at', 'joined_at']
+    ordering = ['-invited_at']
+
+    # Optomize queryset
+    def get_queryset(self, request):
+        return super().get_queryset(request).select_related('user')
+
+# Inline admin for project usage
+class ProjectUsageInline(admin.TabularInline):
+    model = ProjectUsage
+    extra = 0
+    fields = ['reset_date', 'api_calls_used', 'storage_used_gb', 'team_members_count', 'updated_at']
+    readonly_fields = ['reset_date', 'updated']
+    ordering = ['-reset_date']
+
+    def has_add_permission(self, request):
+        return False
+
+# Inline admin for audit logs
+class ProjectAuditInline(admin.TabularInline):
+    model = ProjectAuditLog
+    extra = 0
+    fields = ['action', 'user', 'timestamp', 'details']
+    readonly_fields = ['action', 'user', 'timestamp', 'details']
+    ordering = ['-timestamp']
+
+    def has_add_permission(self, request):
+        return False
+
+    # Prevent deletion of audit logs
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+@admin.register(Project)
+# admin interface for projects
+class ProjectAdmin(admin.ModelAdmin):
+    list_display = [
+        'name',
+        'owner_link',
+        'tenant',
+        'status_badge',
+        'subscription_badge',
+        'member_count_display',
+        'trial_status_display',
+        'created_at_display'
+    ]
+    list_filter = [
+        'operational_status',
+        'subscription_status',
+        TrialEndingFilter,
+        MemberCountFilter,
+        'created_at',
+        'tenant'
+    ]
+    search_fields = [
+        'name',
+        'description',
+        'owner__email',
+        'slug'
+    ]
+    readonly_fields = [
+        'id',
+        'slug',
+        'created_by',
+        'created_at',
+        'updated_at',
+        'member_count_display',
+        'usage_display'
+    ]
+
+    fieldsets = (
+        (_('Project Information'), {
+            'fields': ('id', 'name', 'slug', 'description', 'tenant')
+        }),
+        (_('Ownership'), {
+            'fields': ('owner', 'created_by', 'created_at', 'updated_at')
+        }),
+        (_('Status'), {
+            'fields': ('operational_status', 'subscription_status')
+        }),
+        (_('Resource Limits'), {
+            'fields': (
+                'max_team_members',
+                'max_storage_gb',
+                'max_api_calls_monthly'
+            )
+        }),
+        (_('Trial'), {
+            'fields': ('trial_ends_at',)
+        }),
+        (_('Statistics'), {
+            'fields': ('member_count_display', 'usage_display'),
+            'classes': ('collapse',)
+        }),
+    )
+
+    inlines = [ProjectMemberInLine, ProjectUsageInline, ProjectAuditInline]
+
+    actions = ['archive_projects', 'restore_projects', 'extended_trials']
+
+    # Optimize queryset
+    def get_queryset(self, request):
+        qs = super().get_queryset(request)
+        return qs.select_related(
+            'owner', 'created_by', 'tenant'
+        ).prefatch_related('members')
+
+    # Custom search results
+    def get_search_results(self, request, queryset, search_term):
+        queryset, use_distinct = super().get_search_results(
+            request, queryset, search_term
+        )
+        return queryset, use_distinct
+
+    # Custom display methods
+    def owner_link(self, obj):
+        if obj.owner:
+            url = reverse('admin:users_customuser_change', args=[obj.owner.id])
+            return format_html('<a href="{}">{}</a>', url, obj.owner.email)
+        return '-'
+    owner_link.short_description = _('Owner')
+
+    # Display operation status with color
+    def status_badge(self, obj):
+        colors = {
+            'active': '#28a745',
+            'archived': '#6c757d',
+            'deleted': '#dc3545'
+        }
+        colors = colors.get(obj.operation_status, '#6c757d')
+        return format_html(
+            '<span style="background-color: {}; color: white; padding: 5px 10px; '
+            'border-radius: 3px;">{}</span>',
+            colors,
+            obj.get_operational_status_display()
+        )
+    status_badge.short_description = _('Status')
+
+    # Display subscription status with color
+    def subscription_badge(self, obj):
+        colors = {
+            'active': '#17a2b8',
+            'trial': '#ffc107',
+            'suspended': '#dc3545',
+            'expired': '#6c757d',
+            'cancelled': '#495057'
+        }
+        color = colors.get(obj.subscription_status, '#6c757d')
+        return format_html(
+            '<span style="background-color: {}; color: white; padding: 5px 10px; '
+            'border-radius: 3px;">{}</span>',
+            color,
+            obj.get_subscription_status_display()
+        )
+    subscription_badge.short_description = _('Subscription')
+
+    # Display member count
+    def member_count_display(self, obj):
+        return f'{obj.members.count()} / {obj.max_team_members}'
+    member_count_display.short_description = _('Members')
+
+    # Display trial status
+    def trial_status_display(self, obj):
+        if not obj.trial_ends_at:
+            return '-'
+        from django.utils import timezone
+        if obj.trial_ends_at > timezone.now():
+            days = (obj.trial_ends_at - timezone.now()).days
+            return format_html(
+                '<span style="color: #ffc107;><strong{} days left</strong></span>',
+                days
+            )
+        else:
+            return format_html(
+                '<span style="color: #dc3545;"><strong>Expired</strong></span>'
+            )
+    trial_status_display.short_description = _('Trial Status')
+
+    # Display creation date
+    def created_at_display(selfself, obj):
+        return obj.created_at.strftime('%Y-%m-%d %H:%M')
+    created_at_display.short_description = _('Created')
+
+    # Display usage statics
+    def usage_display(selfself, obj):
+        usage = obj.usage_records.order_by('-reset_date').fisrt()
+        if usage:
+            storage_pct = (usage.storage_used_gb / obj.max_storage_gb * 100) if obj.max_storage_gb > 0 else 0
+            api_pct = (usage.api_calls_used / obj.max_api_calls_monthly * 100) if obj.max_api_calls_monthly > 0 else
+            return format_html(
+                '<div>'
+                '<p><strong>Storage:</strong> {:.1f}GB / {}GB ({:.1f}%)</p>'
+                '<p><strong>API Calls:</strong> {} / {} ({:.1f}%)</p>'
+                '<p><strong>Team:</strong> {} / {}</p>'
+                '</div>',
+                usage.storage_used_gb,
+                obj.max_storage_gb,
+                storage_pct,
+                usage.api_calls_used,
+                obj.max_api_calls_monthly,
+                api_pct,
+                usage.team_members_count,
+                obj.max_team_members
+            )
+        return '-'
+    usage_display.short_description = _('Usage Statistics')
+
+    # Admin actions
+    def archive_projects(self, request, queryset):
+        count = queryset.update(operational_status='archived')
+        self.message_user(request, _('Successfully archived { projects.}').format(count))
+    archive_projects.shorts_description = _('Restore selected projects')
+
+    def restore_projects(self, request, queryset):
+        count = queryset.filter(operational_status='archived').update(operational_status='active')
+        self.message_user(request, _('Successfully restored {} projects.').format(count))
+    restore_projects.short_description = _('Restore selected projects')
+
+    # extend trial for a max of 3 projects
+    def extend_trials(self, request, queryset):
+        from django.utils import timezone
+        from datetime import timedelta
+
+        trial_projects = queryset.filter(subscription_status='trial')
+        limited = trial_projects[:3]
+
+        count = limited.update(subscription_status='trial').update(
+            trial_ends_at=timezone.now() + timedelta(days=30)
+        )
+        self.message_user(request, _('Extended trial for {} prjects.').format(count))
+    extend_trials.short_description = _('Extend by 30 days')
+
+    # Allow adding projects only for superusers
+    def has_add_permission(self, request):
+        return request.user.is_superuser
+
+@admin.register(ProjectMember)
+# Admin interface for projects member
+class projectMemberAdmin(admin.ModelAdmin):
+    list_display = [
+        'user_email',
+        'project_name',
+        'role',
+        'invited_at_display',
+        'joined_at_display'
+    ]
+    list_filter = [
+        'role',
+        'invited_at',
+        'joined_at',
+        'project__tenant'
+    ]
+    search_fields = [
+        'user__email',
+        'project__name',
+        'user__first_name',
+        'user__last_name'
+    ]
+    readonly_fields = [
+        'id',
+        'invited_at'
+    ]
+
+    fieldsets = (
+        (_('Member Information'), {
+            'fields': ('id', 'project', 'user', 'role')
+        }),
+        (_('Dates'), {
+            'fields': ('invited_at', 'joined_at')
+        }),
+    )
+
+    # Optimize queryset
+    def get_queryset(self, request):
+        return super().get_queryset(request).select_related('user', 'projects')
+
+    # Display user email
+    def user_email(self, obj):
+        return obj.user.email
+    user_email.short_description = _('User Email')
+
+    # Display name as link
+    def project_name(selfself, obj):
+        url = reverse('admin:projects_project_change', args=[obj.project.id])
+        return format_html('<a href="{}">{}</a>', url, obj.project.name)
+    project_name.short_description = _('Project')
+
+    def invited_at_display(self, obj):
+        return obj.invited_at.strftime('%Y-%m-%d %H:%M')
+    invited_at_display.short_description = _('Invited At')
+
+    def joined_at_display(self, obj):
+        if obj.joined_at:
+            return obj.joined_at.strftime('%Y-%m-%d %H:%M')
+        return '-'
+    joined_at_display.short_description = _('Joined At')
+
+@admin.register(ProjectUsage)
+# Admin interface for project usage
+class ProjectUsageAdmin(admin.ModelAdmin):
+    list_display = [
+        'project_name',
+        'reset_date',
+        'api_calls_usage',
+        'storage_usage',
+        'team_members_usage',
+        'updated_at_display'
+    ]
+    list_filter = [
+        'reset_date',
+        'updated_at',
+        'project__tenant'
+    ]
+    search_fields = [
+        'project__name',
+        'project__slug'
+    ]
+    readonly_fields = [
+        'id',
+        'project',
+        'reset_date',
+        'updated_at',
+        'usage_breakdown'
+    ]
+
+    fieldsets = (
+        (_('Project Usage'), {
+            'fields': ('id', 'project', 'reset_date')
+        }),
+        (_('Usage Metrics'), {
+            'fields': (
+                'api_calls_used',
+                'storage_used_gb',
+                'team_members_count'
+            )
+        }),
+        (_('Breakdown'), {
+            'fields': ('usage_breakdown',),
+            'classes': ('collapse',)
+        }),
+        (_('Timestamps'), {
+            'fields': ('updated_at',)
+        }),
+    )
+
+    # Optimize queryset
+    def get_queryset(self, request):
+        return super().get_queryset(request).select_related('project')
+
+    # Display project name as link
+    def project_name(self, obj):
+        url = reverse('admin:projects_project_change', args=[obj.project.id])
+        return format_html('<a href="{}">{}</a>', url, obj.project.name)
+    project_name.short_description = _('Project')
+
+    # Display api usage
+    def api_calls_usage(self, obj):
+        if obj.project.max_api_calls_monthly > 0:
+            pct = (obj.api_calls_used / obj.project.max_api_calls_monthly) * 100
+            color = 'red' if pct > 80 else 'orange' if pct > 50 else 'green'
+            return format_html(
+                '<span style="color: {};">{} / {} ({:.1f}%)</span>',
+                color,
+                obj.api_calls_used,
+                obj.project.max_api_calls_monthly,
+                pct
+            )
+        return f"{obj.api_calls_used} / Unlimited"
+    api_calls_usage.short_description = _('API Calls')
+
+    def storage_usage(self, obj):
+        if obj.project.max_storage_gb > 0:
+            pct = (obj.storage_used_gb / obj.project.max_storage_gb) * 100
+            color = 'red' if pct > 80 else 'orange' if pct > 50 else 'green'
+            return format_html(
+                '<span style="color: {};">{:.1f}GB / {}GB ({:.1f}%)</span>',
+                color,
+                obj.storage_used_gb,
+                obj.project.max_storage_gb,
+                pct
+            )
+        return f"{obj.storage_used_gb}GB / Unlimited"
+    storage_usage.short_description = _('Storage')
+
+    def team_members_usage(self, obj):
+        pct = (obj.team_members_count / obj.project.max_team_members) * 100
+        color = 'red' if pct > 80 else 'orange' if pct > 50 else 'green'
+        return format_html(
+            '<span style="color: {};">{} / {} ({:.1f}%)</span>',
+            color,
+            obj.team_members_count,
+            obj.project.max_team_members,
+            pct
+        )
+    team_members_usage.short_description = _('Team Members')
+
+    def updated_at_display(self, obj):
+        return obj.updated_at.strftime('%Y-%m-%d %H:%M')
+    updated_at_display.short_description = _('Updated')
+
+    def usage_breakdown(self, obj):
+        return format_html(
+            '<div>'
+            '<p><strong>API Calls:</strong> {}/{} ({:.1f}%)</p>'
+            '<p><strong>Storage:</strong> {:.1f}GB / {}GB ({:.1f}%)</p>'
+            '<p><strong>Team Members:</strong> {} / {} ({:.1f}%)</p>'
+            '<p><strong>Reset Date:</strong> {}</p>'
+            '</div>',
+            obj.api_calls_used,
+            obj.project.max_api_calls_monthly,
+            (obj.api_calls_used / obj.project.max_api_calls_monthly * 100) if obj.project.max_api_calls_monthly > 0 else 0,
+            obj.storage_used_gb,
+            obj.project.max_storage_gb,
+            (obj.storage_used_gb / obj.project.max_storage_gb * 100) if obj.project.max_storage_gb > 0 else 0,
+            obj.team_members_count,
+            obj.project.max_team_members,
+            (obj.team_members_count / obj.project.max_team_members * 100),
+            obj.reset_date
+        )
+    usage_breakdown.short_description = _('Usage Breakdown')
+
+    usage_breakdown.short_description = _('Usage Breakdown')
+
+    def has_add_permission(self, request):
+        return
+
+@admin.register(ProjectAuditLog)
+# Admin interface for audit logs
+class ProjectAuditLoginAdmin(admin.ModelAdmin):
+    list_display = [
+        'action_badge',
+        'project_name',
+        'user_email',
+        'timestamp_display',
+        'ip_address'
+    ]
+    list_filter = [
+        'action',
+        'timestamp',
+        'project__tenant'
+    ]
+    search_fields = [
+        'project__name',
+        'user__email',
+        'details',
+        'ip_address'
+    ]
+    readonly_fields = [
+        'id',
+        'tenant',
+        'project',
+        'user',
+        'action',
+        'timestamp',
+        'details_display',
+        'ip_address',
+        'user_agent'
+    ]
+
+    fieldsets = (
+        (_('Audit Information'), {
+            'fields': ('id', 'tenant', 'project', 'user')
+        }),
+        (_('Action'), {
+            'fields': ('action', 'timestamp')
+        }),
+        (_('Details'), {
+            'fields': ('details_display',)
+        }),
+        (_('Request Information'), {
+            'fields': ('ip_address', 'user_agent')
+        }),
+    )
+
+    # Optimize queryset
+    def get_queryset(self, request):
+        return super().get_queryset(request).select_related('project', 'user', 'tenant')
+
+    # Display Action with color
+    def action_badge(self, obj):
+        colors = {
+            'created': '#28a745',
+            'updated': '#17a2b8',
+            'deleted': '#dc3545',
+            'archived': '#6c757d',
+            'restored': '#ffc107',
+            'member_added': '#007bff',
+            'member_removed': '#fd7e14',
+            'member_role_changed': '#6f42c1',
+            'settings_updated': '#17a2b8',
+            'data_exported': '#20c997',
+            'accessed': '#6c757d'
+        }
+        color = colors.get(obj.action, '#6c757d')
+        return format_html(
+            '<span style="background-color: {}; color: white; padding: 5px 10px; '
+            'border-radius: 3px;">{}</span>',
+            color,
+            obj.get_action_display()
+        )
+    action_badge.short_description = _('Action')
+
+    # Display project name as link
+    def project_name(selfself, obj):
+        url = reverse('admin:projects_project_change', args=[obj.project.id])
+        return format_html('<a href="{}">{}</a>', url, obj.project.name)
+    project_name.short_description = _('Project')
+
+    def user_email(self, obj):
+        if obj.user:
+            return obj.user.email
+        return '-'
+    user_email.short_description = _('User')
+
+    def details_display(self, obj):
+        if obj.details:
+            items = '<br>'.join(f'<strong>{k}:</strong> {v}' for k, v in obj.details.items())
+            return format_html(items)
+        return '-'
+    details_display.short_description = _('Details')
+
+    def hsa_add_permission(self, request):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
