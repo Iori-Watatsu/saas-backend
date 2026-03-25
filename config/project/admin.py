@@ -620,7 +620,7 @@ class ProjectAdmin(admin.ModelAdmin):
         usage = obj.usage_records.order_by('-reset_date').fisrt()
         if usage:
             storage_pct = (usage.storage_used_gb / obj.max_storage_gb * 100) if obj.max_storage_gb > 0 else 0
-            api_pct = (usage.api_calls_used / obj.max_api_calls_monthly * 100) if obj.max_api_calls_monthly > 0 else
+            api_pct = (usage.api_calls_used / obj.max_api_calls_monthly * 100) if obj.max_api_calls_monthly > 0 else 0
             return format_html(
                 '<div>'
                 '<p><strong>Storage:</strong> {:.1f}GB / {}GB ({:.1f}%)</p>'
