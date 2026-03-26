@@ -562,3 +562,23 @@ DATABASE_ROUTERS = (
 # https://docs.djangoproject.com/en/6.0/howto/static-files/
 
 STATIC_URL = 'static/'
+
+# Channels config
+CHANNEL_LAYERS = {
+    'default': {
+        'BACKEND': 'channels_redis.core.RedisChannelLayer',
+        'CONFIG': {
+            "hosts": [('127.0.0.1', 6379)],
+            "capacity": 1500,
+            "expiry": 10,
+        },
+    },
+}
+
+# WebSocket Config
+WEBSOCKET_ACCEPT_ALL = False
+WEBSOCKET_ALLOWED_ORIGINS = [
+    'localhost:3000',
+    'localhost:8000',
+    'domain.com',
+]
